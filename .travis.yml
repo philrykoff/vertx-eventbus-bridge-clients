@@ -9,6 +9,10 @@ dist: trusty
 services:
 - docker
 
+branches:
+  only:
+  - /.*/
+
 before_install:
 
 install:
