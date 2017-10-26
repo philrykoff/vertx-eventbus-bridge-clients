@@ -1,115 +1,43 @@
 package io.vertx.ext.eventbus.client.transport;
 
-import io.netty.buffer.ByteBuf;
-import io.netty.channel.Channel;
-import io.netty.channel.ChannelHandlerContext;
-import io.netty.handler.codec.ByteToMessageDecoder;
-import io.vertx.ext.eventbus.client.EventBusClientOptions;
+import io.netty.channel.nio.NioEventLoopGroup;
+import io.netty.channel.socket.nio.NioSocketChannel;
+import io.netty.util.concurrent.Future;
+import io.vertx.ext.eventbus.client.logging.Logger;
+import io.vertx.ext.eventbus.client.logging.LoggerFactory;
+import io.vertx.ext.eventbus.client.options.EventBusClientOptions;
 
-import java.nio.charset.StandardCharsets;
-import java.util.List;
-
-/**
- * @author <a href="mailto:julien@julienviet.com">Julien Viet</a>
- */
 public class TcpTransport extends Transport {
 
-  private ChannelHandlerContext handlerCtx;
-  private boolean handshakeComplete = false;
-  private boolean reading;
-  private boolean flush;
+  private TcpTransportChannel channel;
+  private Logger logger;
 
-  public TcpTransport(EventBusClientOptions options) {
-    super(options);
-  }
-
-  /**
-   * Registers event handlers on the channel.
-   *
-   * {@inheritDoc}
-   * @param channel channel to which to add the handlers to
-   * @throws Exception any exception
-   */
-  @Override
-  protected void initChannel(Channel channel) throws Exception {
-    super.initChannel(channel);
-
-    channel.pipeline().addLast(new ByteToMessageDecoder() {
-      @Override
-      public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
-        reading = true;
-        super.channelRead(ctx, msg);
-      }
-      @Override
-      public void channelReadComplete(ChannelHandlerContext ctx) throws Exception {
-        super.channelReadComplete(ctx);
-        reading = false;
-        if (flush) {
-          flush = false;
-          ctx.flush();
-        }
-      }
-      @Override
-      public void channelActive(ChannelHandlerContext ctx) throws Exception {
-        super.channelActive(ctx);
-        handlerCtx = ctx;
-        if(!TcpTransport.this.options.isSsl()) {
-          handshakeComplete = true;
-          connectedHandler.handle(null);
-        }
-      }
-      @Override
-      protected void decode(ChannelHandlerContext ctx, ByteBuf in, List<Object> out) throws Exception {
-        while (true) {
-          if (in.readableBytes() < 4) {
-            break;
-          }
-          int readerIdx = in.readerIndex();
-          int len = in.getInt(readerIdx);
-          if (in.readableBytes() < 4 + len) {
-            return;
-          }
-          String json = in.toString(readerIdx + 4, len, StandardCharsets.UTF_8);
-          in.readerIndex(readerIdx + 4 + len);
-          messageHandler.handle(json);
-        }
-      }
-      @Override
-      public void channelInactive(ChannelHandlerContext ctx) throws Exception {
-        handlerCtx = null;
-        if(handshakeComplete) {
-          closeHandler.handle(null);
-        }
-      }
-    });
+  public TcpTransport(NioEventLoopGroup group, EventBusClientOptions options) {
+    super(group, options);
+    this.bootstrap.channel(NioSocketChannel.class);
+    this.logger = LoggerFactory.getLogger(TcpTransport.class);
   }
 
   @Override
-  void sslHandshakeHandler(Channel channel) {
-    handshakeComplete = true;
-    connectedHandler.handle(null);
+  public Future<Void> connect() {
+    this.channel = new TcpTransportChannel(this, options);
+    this.bootstrap.handler(this.channel);
+    return this.bootstrap.connect(this.options.getHost(), this.options.getPort());
   }
 
-  @Override
-  public void send(final String message) {
-    if (handlerCtx.executor().inEventLoop()) {
-      ByteBuf buff = handlerCtx.alloc().buffer();
-      buff.writeInt(0);
-      buff.writeCharSequence(message, StandardCharsets.UTF_8);
-      buff.setInt(0, buff.readableBytes() - 4);
-      if (reading) {
-        flush = true;
-        addSendErrorHandler(handlerCtx, message, handlerCtx.write(buff));
-      } else {
-        addSendErrorHandler(handlerCtx, message, handlerCtx.writeAndFlush(buff));
-      }
-    } else {
-      handlerCtx.executor().execute(new Runnable() {
-        @Override
-        public void run() {
-          send(message);
-        }
-      });
+  public void send(String message) {
+    if(this.channel == null) {
+      this.logger.error("Could not send message on unconnected transport: " + message);
+      return;
     }
+    this.channel.send(message);
+  }
+
+  public Future<Void> close() {
+    if(this.channel == null) {
+      this.logger.error("Could not close unconnected transport.");
+      return group.next().<Void>newFailedFuture(new Throwable("Could not close unconnected transport."));
+    }
+    return this.channel.close();
   }
 }

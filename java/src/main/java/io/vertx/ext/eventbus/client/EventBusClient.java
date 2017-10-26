@@ -1,10 +1,6 @@
 package io.vertx.ext.eventbus.client;
 
-import io.netty.bootstrap.Bootstrap;
-import io.netty.channel.Channel;
-import io.netty.channel.ChannelFuture;
 import io.netty.channel.nio.NioEventLoopGroup;
-import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.util.concurrent.Future;
 import io.netty.util.concurrent.GenericFutureListener;
 import io.netty.util.concurrent.ScheduledFuture;
@@ -12,11 +8,11 @@ import io.vertx.ext.eventbus.client.json.GsonCodec;
 import io.vertx.ext.eventbus.client.json.JsonCodec;
 import io.vertx.ext.eventbus.client.logging.Logger;
 import io.vertx.ext.eventbus.client.logging.LoggerFactory;
+import io.vertx.ext.eventbus.client.options.EventBusClientOptions;
+import io.vertx.ext.eventbus.client.options.HttpTransportOptions;
 import io.vertx.ext.eventbus.client.options.TcpTransportOptions;
 import io.vertx.ext.eventbus.client.options.WebSocketTransportOptions;
-import io.vertx.ext.eventbus.client.transport.TcpTransport;
-import io.vertx.ext.eventbus.client.transport.Transport;
-import io.vertx.ext.eventbus.client.transport.WebSocketTransport;
+import io.vertx.ext.eventbus.client.transport.*;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -33,7 +29,7 @@ public class EventBusClient {
   /**
    * Creates an {@code EventBusClient} instance to connect to a Vert.x EventBus TCP bridge
    * @param eventBusClientOptions the {@code EventBusClient} options
-   * @return
+   * @return the created {@code EventBusClient}
    */
   public static EventBusClient tcp(EventBusClientOptions eventBusClientOptions) {
     return EventBusClient.tcp(eventBusClientOptions, new GsonCodec());
@@ -43,7 +39,7 @@ public class EventBusClient {
    * Creates an {@code EventBusClient} instance to connect to a Vert.x EventBus TCP bridge
    * @param eventBusClientOptions the {@code EventBusClient} options
    * @param jsonCodec the JSON codec to use
-   * @return
+   * @return the created {@code EventBusClient}
    */
   public static EventBusClient tcp(EventBusClientOptions eventBusClientOptions, JsonCodec jsonCodec) {
 
@@ -54,13 +50,14 @@ public class EventBusClient {
       eventBusClientOptions.setTcpTransportOptions(new TcpTransportOptions());
     }
 
-    return new EventBusClient(new TcpTransport(eventBusClientOptions), eventBusClientOptions, jsonCodec);
+    NioEventLoopGroup group = new NioEventLoopGroup(1);
+    return new EventBusClient(group, new TcpTransport(group, eventBusClientOptions), eventBusClientOptions, jsonCodec);
   }
 
   /**
    * Creates an {@code EventBusClient} instance to connect to a Vert.x EventBus SockJS bridge using WebSockets
    * @param eventBusClientOptions the {@code EventBusClient} options
-   * @return
+   * @return the created {@code EventBusClient}
    */
   public static EventBusClient websocket(EventBusClientOptions eventBusClientOptions) {
     return EventBusClient.websocket(eventBusClientOptions, new GsonCodec());
@@ -70,7 +67,7 @@ public class EventBusClient {
    * Creates an {@code EventBusClient} instance to connect to a Vert.x EventBus SockJS bridge using WebSockets
    * @param eventBusClientOptions the {@code EventBusClient} options
    * @param jsonCodec the JSON codec to use
-   * @return
+   * @return the created {@code EventBusClient}
    */
   public static EventBusClient websocket(EventBusClientOptions eventBusClientOptions, JsonCodec jsonCodec) {
 
@@ -81,23 +78,49 @@ public class EventBusClient {
       eventBusClientOptions.setWebSocketTransportOptions(new WebSocketTransportOptions());
     }
 
-    return new EventBusClient(new WebSocketTransport(eventBusClientOptions), eventBusClientOptions, jsonCodec);
+    NioEventLoopGroup group = new NioEventLoopGroup(1);
+    return new EventBusClient(group, new WebSocketTransport(group, eventBusClientOptions), eventBusClientOptions, jsonCodec);
   }
 
-  public static int MESSAGE_PRINT_LIMIT = 10000;
+  /**
+   * Creates an {@code EventBusClient} instance to connect to a Vert.x EventBus TCP bridge
+   * @param eventBusClientOptions the {@code EventBusClient} options
+   * @return the created {@code EventBusClient}
+   */
+  public static EventBusClient http(EventBusClientOptions eventBusClientOptions) {
+    return EventBusClient.http(eventBusClientOptions, new GsonCodec());
+  }
 
-  private DeliveryOptions defaultOptions = new DeliveryOptions();
-  private final Transport transport;
-  private final NioEventLoopGroup group = new NioEventLoopGroup(1);
-  private Bootstrap bootstrap;
-  private final EventBusClientOptions eventBusClientOptions;
-  private final JsonCodec codec;
+  /**
+   * Creates an {@code EventBusClient} instance to connect to a Vert.x EventBus TCP bridge
+   * @param eventBusClientOptions the {@code EventBusClient} options
+   * @param jsonCodec the JSON codec to use
+   * @return the created {@code EventBusClient}
+   */
+  public static EventBusClient http(EventBusClientOptions eventBusClientOptions, JsonCodec jsonCodec) {
+
+    if (eventBusClientOptions == null) {
+      eventBusClientOptions = new EventBusClientOptions();
+    }
+    if(eventBusClientOptions.getHttpTransportOptions() == null) {
+      eventBusClientOptions.setHttpTransportOptions(new HttpTransportOptions());
+    }
+
+    NioEventLoopGroup group = new NioEventLoopGroup(1);
+    return new EventBusClient(group, new HttpTransport(group, eventBusClientOptions, jsonCodec), eventBusClientOptions, jsonCodec);
+  }
+
   private Logger logger;
 
+  private DeliveryOptions defaultOptions = new DeliveryOptions();
+  private final NioEventLoopGroup group;
+  private final Transport transport;
+  private final EventBusClientOptions eventBusClientOptions;
+  private final JsonCodec codec;
+
   private final ConcurrentMap<String, HandlerList> consumerMap = new ConcurrentHashMap<>();
+  private Future<Void> connectFuture;
   private ScheduledFuture<?> pingPeriodic;
-  private ChannelFuture connectFuture;
-  private Channel channel;
   private ScheduledFuture<?> reconnectFuture;
   private boolean initializedTransport;
   private boolean connected;
@@ -108,9 +131,9 @@ public class EventBusClient {
   private volatile Handler<Throwable> exceptionHandler;
   private Handler<Void> closeHandler;
 
-  private EventBusClient(Transport transport, EventBusClientOptions eventBusClientOptions, JsonCodec jsonCodec) {
+  private EventBusClient(NioEventLoopGroup group, Transport transport, EventBusClientOptions eventBusClientOptions, JsonCodec jsonCodec) {
+    this.group = group;
     this.transport = transport;
-    this.bootstrap = new Bootstrap().group(this.group);
     this.eventBusClientOptions = eventBusClientOptions;
     this.codec = jsonCodec;
     this.logger = LoggerFactory.getLogger(EventBusClient.class);
@@ -150,8 +173,7 @@ public class EventBusClient {
           pingPeriodic = group.next().scheduleAtFixedRate(new Runnable() {
                                                             @Override
                                                             public void run() {
-                                                              Map<String, String> msg = Collections.singletonMap("type", "ping");
-                                                              send(codec.encode(msg));
+                                                                EventBusClient.this.send("{\"type\":\"ping\"}");
                                                             }
                                                           },
             EventBusClient.this.eventBusClientOptions.getPingInterval(),
@@ -160,7 +182,6 @@ public class EventBusClient {
           connected = true;
           // TODO: only reset this to 0 when this was no short lived connection (e.g. < 5 secs)?
           reconnectTries = 0;
-          channel = connectFuture.channel();
           connectFuture = null;
 
           if(EventBusClient.this.connectedHandler != null)  {
@@ -191,7 +212,6 @@ public class EventBusClient {
         synchronized (EventBusClient.this) {
           logger.info("Closed connection to bridge.");
           connected = false;
-          channel = null;
           if (closeHandler != null) {
             closeHandler.handle(null);
           }
@@ -200,9 +220,6 @@ public class EventBusClient {
         }
       }
     });
-
-    bootstrap.channel(NioSocketChannel.class);
-    bootstrap.handler(transport);
   }
 
   private synchronized void connectTransport() {
@@ -215,12 +232,12 @@ public class EventBusClient {
     Integer port = EventBusClient.this.eventBusClientOptions.getPort();
 
     if(EventBusClient.this.eventBusClientOptions.getProxyOptions() != null) {
-      logger.info("Connecting to bridge at " + host + ":" + port + " (via " + EventBusClient.this.eventBusClientOptions.getProxyOptions().toString() + ")...");
+      logger.info("Connecting to bridge at " + host + ":" + port + " (via " + EventBusClient.this.eventBusClientOptions.getProxyOptions().toString() + ") using " + this.transport.getClass().getSimpleName() + "...");
     } else {
-      logger.info("Connecting to bridge at " + host + ":" + port + "...");
+      logger.info("Connecting to bridge at " + host + ":" + port + " using " + this.transport.getClass().getSimpleName() + "...");
     }
 
-    connectFuture = bootstrap.connect(host, port)
+    connectFuture = transport.connect()
       .addListener(new GenericFutureListener<Future<? super Void>>() {
       @Override
       public void operationComplete(Future future) {
@@ -259,7 +276,12 @@ public class EventBusClient {
   private void handlePendingTasks() {
 
     // First register, then send pending tasks, as those tasks may result in messages being sent to registered channels
-    consumerMap.keySet().forEach(this::sendRegistration);
+    if(this.eventBusClientOptions.getReregisterChannelsUponConnect()) {
+      for(String address : consumerMap.keySet()) {
+        logger.info("Registering address: " + address);
+        send("register", address, null, null, null);
+      }
+    }
 
     Handler<Transport> t;
     while ((t = this.pendingTasks.poll()) != null) {
@@ -299,6 +321,10 @@ public class EventBusClient {
           String message = (String) msg.get("message");
 //          int failureCode = msg.get("failureCode").getAsInt();
 //          String failureType = msg.get("failureType").getAsString();
+          if(address == null) {
+            logger.info("Received error without address present, probably the address was not found: " + message);
+            return;
+          }
           HandlerList consumers = consumerMap.get(address);
           if (consumers != null) {
             consumers.fail(new RuntimeException(message));
@@ -345,10 +371,8 @@ public class EventBusClient {
    * (neither through auto reconnect, nor by sending a message).
    */
   public void close() {
-    if(channel != null) {
-      channel.close();
-    }
     closed = true;
+    transport.close();
   }
 
   /**
@@ -406,22 +430,22 @@ public class EventBusClient {
       final AtomicBoolean registered = new AtomicBoolean(true);
       replyAddr = UUID.randomUUID().toString();
 
-      MessageHandler<T> messageHandler = new MessageHandler<T>() {
+      final MessageHandler<T> messageHandler = new MessageHandler<T>() {
         @Override
         public String address() { return replyAddr; };
         @Override
         public void handleMessage(Message<T> msg) {
           if (registered.compareAndSet(true, false)) {
             this.cancelTimeout();
-            unregister(this);
-            replyHandler.handle(new AsyncResult<>(msg, null));
+            unregister(this, false);
+            replyHandler.handle(new AsyncResult<Message<T>>(msg, null));
           }
         }
         @Override
         public void handleError(Throwable err) {
           if (registered.compareAndSet(true, false)) {
             this.cancelTimeout();
-            unregister(this);
+            unregister(this, false);
             replyHandler.handle(new AsyncResult<Message<T>>(null, err));
           }
         }
@@ -434,11 +458,11 @@ public class EventBusClient {
         }
       }, options.getSendTimeout(), TimeUnit.MILLISECONDS));
 
-      register(messageHandler);
+      register(messageHandler, null, false);
     } else {
       replyAddr = null;
     }
-    sendOrPublish(address, message, options.getHeaders(), replyAddr, true);
+    send("send", address, message, options.getHeaders(), replyAddr);
     return this;
   }
 
@@ -452,7 +476,21 @@ public class EventBusClient {
    *
    */
   public EventBusClient publish(String address, Object message) {
-    sendOrPublish(address, message, null, null, false);
+    send("publish", address, message, null, null);
+    return this;
+  }
+
+  /**
+   * Like {@link #publish(String, Object)} but specifying {@code options} that can be used to configure the delivery.
+   *
+   * @param address  the address to publish it to
+   * @param message  the message, may be {@code null}
+   * @param options  delivery options
+   * @return a reference to this, so the API can be used fluently
+   *
+   */
+  public EventBusClient publish(String address, Object message, DeliveryOptions options) {
+    send("publish", address, message, options == null ? null : options.getHeaders(), null);
     return this;
   }
 
@@ -461,16 +499,27 @@ public class EventBusClient {
    *
    * @param address  the address that will register it at
    * @param handler  the handler that will process the received messages
-   *
    * @return the event bus message consumer
    */
   public <T> MessageConsumer<T> consumer(String address, Handler<Message<T>> handler) {
+    return consumer(address, null, handler);
+  }
+
+  /**
+   * Like {@link #consumer(String, Handler)} but specifying {@code options} that can be used to configure the delivery.
+   *
+   * @param address  the address that will register it at
+   * @param options  delivery options
+   * @param handler  the handler that will process the received messages
+   * @return the event bus message consumer
+   */
+  public <T> MessageConsumer<T> consumer(String address, DeliveryOptions options, Handler<Message<T>> handler) {
     MessageConsumer<T> consumer = new MessageConsumer<>(this, address, handler);
-    register(consumer.handler());
+    register(consumer.handler(), options == null ? null : options.getHeaders(), true);
     return consumer;
   }
 
-  private void register(MessageHandler<?> handler) {
+  private void register(MessageHandler<?> handler, Map<String, String> headers, boolean atServer) {
     String address = handler.address();
     HandlerList result = consumerMap.compute(address, (k, v) -> {
       if (v == null) {
@@ -481,7 +530,7 @@ public class EventBusClient {
         return new HandlerList(l);
       }
     });
-    if (result.handlers.size() == 1) {
+    if (atServer && result.handlers.size() == 1) {
 
       // If we would just create a task for it, that would be send upon connection creation redundandly to all other re-registered handlers
       if(!connected) {
@@ -490,20 +539,12 @@ public class EventBusClient {
         return;
       }
 
-      sendRegistration(address);
+      logger.info("Registering address: " + address);
+      send("register", address, null, headers, null);
     }
   }
 
-  private void sendRegistration(String address)
-  {
-    Map<String, Object> obj = new HashMap<>();
-    obj.put("type", "register");
-    obj.put("address", address);
-    final String msg = codec.encode(obj);
-    send(msg);
-  }
-
-  void unregister(MessageHandler<?> handler) {
+  void unregister(MessageHandler<?> handler, boolean atServer) {
     String address = handler.address();
     HandlerList result = consumerMap.compute(address, (k, v) -> {
       if (v.handlers.size() == 1) {
@@ -513,12 +554,12 @@ public class EventBusClient {
           return v;
         }
       } else {
-        ArrayList<MessageHandler> list = new ArrayList<>(v.handlers);
+        ArrayList<MessageHandler> list = new ArrayList<MessageHandler>(v.handlers);
         list.remove(handler);
         return new HandlerList(list);
       }
     });
-    if (result == null) {
+    if (atServer && result == null) {
       Map<String, Object> obj = new HashMap<>();
       obj.put("type", "unregister");
       obj.put("address", address);
@@ -550,7 +591,7 @@ public class EventBusClient {
    */
   public EventBusClient exceptionHandler(Handler<Throwable> exceptionHandler) {
     this.exceptionHandler = exceptionHandler;
-    this.transport.setExceptionHandler(exceptionHandler);
+    this.transport.exceptionHandler(exceptionHandler);
     return this;
   }
 
@@ -578,9 +619,9 @@ public class EventBusClient {
     }
   }
 
-  private void sendOrPublish(String address, Object body, Map<String, String> headers, String replyAddress, boolean send) {
+  private void send(String type, String address, Object body, Map<String, String> headers, String replyAddress) {
     Map<String, Object> obj = new HashMap<>();
-    obj.put("type", send ? "send" : "publish");
+    obj.put("type", type);
     obj.put("address", address);
     if (replyAddress != null) {
       obj.put("replyAddress", replyAddress);
@@ -588,7 +629,9 @@ public class EventBusClient {
     if (headers != null) {
       obj.put("headers", headers);
     }
-    obj.put("body", body);
+    if (body != null) {
+      obj.put("body", body);
+    }
     final String msg = codec.encode(obj);
     send(msg);
   }
@@ -597,7 +640,7 @@ public class EventBusClient {
     execute(new Handler<Transport>() {
       @Override
       public void handle(Transport event) {
-        if(message.length() > MESSAGE_PRINT_LIMIT) {
+        if(message.length() > eventBusClientOptions.getMessagePrintLimit()) {
           logger.info("Sending message with " + message.length() + " chars.");
         } else {
           logger.info("Sending message: " + message);

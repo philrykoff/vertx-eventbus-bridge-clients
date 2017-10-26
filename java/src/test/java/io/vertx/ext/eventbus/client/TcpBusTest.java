@@ -9,6 +9,7 @@ import io.vertx.core.net.NetServerOptions;
 import io.vertx.ext.bridge.BridgeOptions;
 import io.vertx.ext.bridge.PermittedOptions;
 import io.vertx.ext.eventbus.bridge.tcp.TcpEventBusBridge;
+import io.vertx.ext.eventbus.client.options.EventBusClientOptions;
 import io.vertx.ext.eventbus.client.options.JksTrustOptions;
 import io.vertx.ext.eventbus.client.options.PemTrustOptions;
 import io.vertx.ext.eventbus.client.options.PfxTrustOptions;
@@ -437,8 +438,7 @@ public class TcpBusTest {
     final Async async = ctx.async(5);
     EventBusClient client = client(ctx);
 
-    ctx.<EventBusClientOptions>get("clientOptions").setIdleTimeout(100)
-                                                   .setAutoReconnectInterval(0);
+    ctx.<EventBusClientOptions>get("clientOptions").setAutoReconnectInterval(0).getTcpTransportOptions().setIdleTimeout(100);
 
     client.connectedHandler(event -> {
       countDownAndCloseClient(async, client);

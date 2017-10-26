@@ -7,6 +7,11 @@ import java.security.KeyStore;
  */
 public class PfxTrustOptions extends TrustOptions {
 
+  public PfxTrustOptions(String path)
+  {
+    super(path, null);
+  }
+
   public PfxTrustOptions(String path, String password)
   {
     super(path, password);

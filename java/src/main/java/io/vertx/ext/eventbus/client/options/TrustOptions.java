@@ -8,10 +8,10 @@ import java.security.KeyStore;
  */
 public abstract class TrustOptions {
 
-  protected final String path;
-  protected final String password;
+  final String path;
+  final String password;
 
-  public TrustOptions(String path, String password)
+  TrustOptions(String path, String password)
   {
     this.path = path;
     this.password = password;
@@ -19,7 +19,7 @@ public abstract class TrustOptions {
 
   public abstract KeyStore getKeyStore() throws Exception;
 
-  protected KeyStore getSupportedKeyStore(String algorithm) throws Exception
+  KeyStore getSupportedKeyStore(String algorithm) throws Exception
   {
     KeyStore keyStore = KeyStore.getInstance(algorithm);
 

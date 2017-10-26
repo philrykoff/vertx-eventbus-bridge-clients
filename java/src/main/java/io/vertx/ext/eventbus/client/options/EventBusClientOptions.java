@@ -1,9 +1,4 @@
-package io.vertx.ext.eventbus.client;
-
-import io.vertx.ext.eventbus.client.options.ProxyOptions;
-import io.vertx.ext.eventbus.client.options.TcpTransportOptions;
-import io.vertx.ext.eventbus.client.options.TrustOptions;
-import io.vertx.ext.eventbus.client.options.WebSocketTransportOptions;
+package io.vertx.ext.eventbus.client.options;
 
 /**
  * @author <a href="mailto:pl@linux.com">Phil Lehmann</a>
@@ -38,11 +33,6 @@ public class EventBusClientOptions {
   public static final boolean DEFAULT_SSL = false;
 
   /**
-   * Default idle timeout = 0 ms (0 = disabled)
-   */
-  public static final int DEFAULT_IDLE_TIMEOUT = 0;
-
-  /**
    * Default value of whether hostname verification (for SSL/TLS) is enabled = true
    */
   public static final boolean DEFAULT_VERIFY_HOST = true;
@@ -67,14 +57,24 @@ public class EventBusClientOptions {
    */
   public static final int DEFAULT_MAX_AUTO_RECONNECT_TRIES = 0;
 
+  /**
+   * The default maximum string length of messages being logged = 8192
+   */
+  public static final int DEFAULT_MESSAGE_PRINT_LIMIT = 8192;
+
+  /**
+   * The default value of whether to automatically reregister channels upon connect = true
+   */
+  public static final boolean DEFAULT_REREGISTER_CHANNELS_UPON_CONNECT = true;
+
   private TcpTransportOptions tcpTransportOptions;
   private WebSocketTransportOptions webSocketTransportOptions;
+  private HttpTransportOptions httpTransportOptions;
 
   private String host;
   private int port;
 
   private boolean ssl;
-  private int idleTimeout;
   private int connectTimeout;
   private int pingInterval;
   private boolean verifyHost;
@@ -85,6 +85,9 @@ public class EventBusClientOptions {
   private boolean autoReconnect;
   private int autoReconnectInterval;
   private int maxAutoReconnectTries;
+
+  private int messagePrintLimit;
+  private boolean reregisterChannelsUponConnect;
 
   /**
    * Default constructor
@@ -98,7 +101,6 @@ public class EventBusClientOptions {
     this.port = DEFAULT_PORT;
 
     this.ssl = DEFAULT_SSL;
-    this.idleTimeout = DEFAULT_IDLE_TIMEOUT;
     this.connectTimeout = DEFAULT_CONNECT_TIMEOUT;
     this.pingInterval = DEFAULT_PING_INTERVAL;
     this.verifyHost = DEFAULT_VERIFY_HOST;
@@ -109,21 +111,27 @@ public class EventBusClientOptions {
     this.autoReconnect = DEFAULT_AUTO_RECONNECT;
     this.autoReconnectInterval = DEFAULT_AUTO_RECONNECT_INTERVAL;
     this.maxAutoReconnectTries = DEFAULT_MAX_AUTO_RECONNECT_TRIES;
+
+    this.messagePrintLimit = DEFAULT_MESSAGE_PRINT_LIMIT;
+    this.reregisterChannelsUponConnect = DEFAULT_REREGISTER_CHANNELS_UPON_CONNECT;
   }
 
   /**
-   * Set the TCP transport options for usage with {@link io.vertx.ext.eventbus.client.transport.TcpTransport}
+   * Set the TCP transport options
    *
    * @param tcpTransportOptions TCP transport options
    * @return a reference to this, so the API can be used fluently
    */
   public EventBusClientOptions setTcpTransportOptions(TcpTransportOptions tcpTransportOptions) {
+    if (tcpTransportOptions == null) {
+      throw new IllegalArgumentException("tcpTransportOptions must not be null");
+    }
     this.tcpTransportOptions = tcpTransportOptions;
     return this;
   }
 
   /**
-   * Get the TCP transport options for usage with {@link io.vertx.ext.eventbus.client.transport.TcpTransport}
+   * Get the TCP transport options
    *
    * @return TCP transport options
    */
@@ -132,23 +140,49 @@ public class EventBusClientOptions {
   }
 
   /**
-   * Set the WebSocket transport options for usage with {@link io.vertx.ext.eventbus.client.transport.WebSocketTransport}
+   * Set the WebSocket transport options
    *
    * @param webSocketTransportOptions WebSocket transport options
    * @return a reference to this, so the API can be used fluently
    */
   public EventBusClientOptions setWebSocketTransportOptions(WebSocketTransportOptions webSocketTransportOptions) {
+    if (webSocketTransportOptions == null) {
+      throw new IllegalArgumentException("webSocketTransportOptions must not be null");
+    }
     this.webSocketTransportOptions = webSocketTransportOptions;
     return this;
   }
 
   /**
-   * Get the WebSocket transport options for usage with {@link io.vertx.ext.eventbus.client.transport.WebSocketTransport}
+   * Set the WebSocket transport options
    *
    * @return WebSocket transport options
    */
   public WebSocketTransportOptions getWebSocketTransportOptions() {
     return this.webSocketTransportOptions;
+  }
+
+  /**
+   * Set the HTTP transport options
+   *
+   * @param httpTransportOptions HTTP transport options
+   * @return a reference to this, so the API can be used fluently
+   */
+  public EventBusClientOptions setHttpTransportOptions(HttpTransportOptions httpTransportOptions) {
+    if (httpTransportOptions == null) {
+      throw new IllegalArgumentException("httpTransportOptions must not be null");
+    }
+    this.httpTransportOptions = httpTransportOptions;
+    return this;
+  }
+
+  /**
+   * Get the HTTP transport options
+   *
+   * @return HTTP transport options
+   */
+  public HttpTransportOptions getHttpTransportOptions() {
+    return this.httpTransportOptions;
   }
 
   /**
@@ -176,6 +210,9 @@ public class EventBusClientOptions {
    * @return
    */
   public EventBusClientOptions setPort(int port) {
+    if (port < 0 || port > 65535) {
+      throw new IllegalArgumentException("port must be >= 0 and <= 65535");
+    }
     this.port = port;
     return this;
   }
@@ -203,28 +240,6 @@ public class EventBusClientOptions {
    */
   public boolean isSsl() {
     return this.ssl;
-  }
-
-  /**
-   * Set the idle timeout, in seconds. zero means don't timeout.
-   * This determines if a connection will timeout and be closed if no data is received within the timeout.
-   *
-   * @param idleTimeout the idle timeout, in milliseconds
-   * @return a reference to this, so the API can be used fluently
-   */
-  public EventBusClientOptions setIdleTimeout(int idleTimeout) {
-    if (idleTimeout < 0) {
-      throw new IllegalArgumentException("idleTimeout must be >= 0");
-    }
-    this.idleTimeout = idleTimeout;
-    return this;
-  }
-
-  /**
-   * @return the idle timeout, in milliseconds (0 means no timeout)
-   */
-  public int getIdleTimeout() {
-    return this.idleTimeout;
   }
 
   /**
@@ -405,5 +420,44 @@ public class EventBusClientOptions {
   public EventBusClientOptions setMaxAutoReconnectTries(int maxAutoReconnectTries) {
     this.maxAutoReconnectTries = maxAutoReconnectTries;
     return this;
+  }
+
+  /**
+   * Set the maximum string length of messages being logged
+   *
+   * @param messagePrintLimit maximum string length of messages being logged
+   * @return a reference to this, so the API can be used fluently
+   */
+  public EventBusClientOptions setMessagePrintLimit(int messagePrintLimit) {
+    if (port < 0) {
+      throw new IllegalArgumentException("messagePrintLimit must be >= 0");
+    }
+    this.messagePrintLimit = messagePrintLimit;
+    return this;
+  }
+
+  /**
+   * @return maximum string length of messages being logged
+   */
+  public int getMessagePrintLimit() {
+    return this.messagePrintLimit;
+  }
+
+  /**
+   * Set whether to automatically reregister channels upon connect
+   *
+   * @param reregisterChannelsUponConnect whether to automatically reregister channels upon connect
+   * @return a reference to this, so the API can be used fluently
+   */
+  public EventBusClientOptions setReregisterChannelsUponConnect(boolean reregisterChannelsUponConnect) {
+    this.reregisterChannelsUponConnect = reregisterChannelsUponConnect;
+    return this;
+  }
+
+  /**
+   * @return whether to automatically reregister channels upon connect
+   */
+  public boolean getReregisterChannelsUponConnect() {
+    return this.reregisterChannelsUponConnect;
   }
 }

@@ -7,6 +7,11 @@ import java.security.KeyStore;
  */
 public class JksTrustOptions extends TrustOptions {
 
+  public JksTrustOptions(String path)
+  {
+    super(path, null);
+  }
+
   public JksTrustOptions(String path, String password)
   {
     super(path, password);

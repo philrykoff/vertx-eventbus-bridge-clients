@@ -8,17 +8,23 @@ package io.vertx.ext.eventbus.client.options;
 public class WebSocketTransportOptions {
 
   /**
-   * The default path to connect the WebSocket client to = /eventbus/websocket
+   * The default path to connect the WebSocket client to = /eventbus
    */
-  public static final String DEFAULT_PATH = "/eventbus/websocket";
+  public static final String DEFAULT_PATH = "/eventbus";
 
   /**
    * The default value for maximum websocket frame size = 65536 bytes
    */
   public static final int DEFAULT_MAX_WEBSOCKET_FRAME_SIZE = 65536;
 
+  /**
+   * Default idle timeout = 0 ms (0 = disabled)
+   */
+  public static final int DEFAULT_IDLE_TIMEOUT = 0;
+
   private String path;
   private int maxWebsocketFrameSize;
+  private int idleTimeout;
 
   public WebSocketTransportOptions() {
     init();
@@ -27,6 +33,7 @@ public class WebSocketTransportOptions {
   private void init() {
     this.path = DEFAULT_PATH;
     this.maxWebsocketFrameSize = DEFAULT_MAX_WEBSOCKET_FRAME_SIZE;
+    this.idleTimeout = DEFAULT_IDLE_TIMEOUT;
   }
 
   /**
@@ -67,5 +74,27 @@ public class WebSocketTransportOptions {
   public WebSocketTransportOptions setMaxWebsocketFrameSize(int maxWebsocketFrameSize) {
     this.maxWebsocketFrameSize = maxWebsocketFrameSize;
     return this;
+  }
+
+  /**
+   * Set the idle timeout, in seconds. zero means don't timeout.
+   * This determines if a connection will timeout and be closed if no data is received within the timeout.
+   *
+   * @param idleTimeout the idle timeout, in milliseconds
+   * @return a reference to this, so the API can be used fluently
+   */
+  public WebSocketTransportOptions setIdleTimeout(int idleTimeout) {
+    if (idleTimeout < 0) {
+      throw new IllegalArgumentException("idleTimeout must be >= 0");
+    }
+    this.idleTimeout = idleTimeout;
+    return this;
+  }
+
+  /**
+   * @return the idle timeout, in milliseconds (0 means no timeout)
+   */
+  public int getIdleTimeout() {
+    return this.idleTimeout;
   }
 }

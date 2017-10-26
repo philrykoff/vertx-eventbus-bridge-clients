@@ -1,6 +1,7 @@
 package io.vertx.ext.eventbus.client;
 
 import io.vertx.ext.eventbus.client.json.JacksonCodec;
+import io.vertx.ext.eventbus.client.options.EventBusClientOptions;
 import io.vertx.ext.eventbus.client.options.WebSocketTransportOptions;
 import io.vertx.ext.unit.TestContext;
 
