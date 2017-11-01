@@ -9,7 +9,7 @@ import java.security.KeyStore;
 public abstract class TrustOptions {
 
   final String path;
-  final String password;
+  private final String password;
 
   TrustOptions(String path, String password)
   {

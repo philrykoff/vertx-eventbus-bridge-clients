@@ -1,4 +1,6 @@
-package io.vertx.ext.eventbus.client.options;
+package io.vertx.ext.eventbus.client;
+
+import io.vertx.ext.eventbus.client.options.*;
 
 /**
  * @author <a href="mailto:pl@linux.com">Phil Lehmann</a>
@@ -67,9 +69,7 @@ public class EventBusClientOptions {
    */
   public static final boolean DEFAULT_REREGISTER_CHANNELS_UPON_CONNECT = true;
 
-  private TcpTransportOptions tcpTransportOptions;
-  private WebSocketTransportOptions webSocketTransportOptions;
-  private HttpTransportOptions httpTransportOptions;
+  private TransportOptions transportOptions;
 
   private String host;
   private int port;
@@ -117,72 +117,23 @@ public class EventBusClientOptions {
   }
 
   /**
-   * Set the TCP transport options
+   * Set the transport options
    *
-   * @param tcpTransportOptions TCP transport options
+   * @param transportOptions transport options
    * @return a reference to this, so the API can be used fluently
    */
-  public EventBusClientOptions setTcpTransportOptions(TcpTransportOptions tcpTransportOptions) {
-    if (tcpTransportOptions == null) {
-      throw new IllegalArgumentException("tcpTransportOptions must not be null");
-    }
-    this.tcpTransportOptions = tcpTransportOptions;
+  public EventBusClientOptions setTransportOptions(TransportOptions transportOptions) {
+    this.transportOptions = transportOptions;
     return this;
   }
 
   /**
-   * Get the TCP transport options
+   * Get the transport options
    *
    * @return TCP transport options
    */
-  public TcpTransportOptions getTcpTransportOptions() {
-    return this.tcpTransportOptions;
-  }
-
-  /**
-   * Set the WebSocket transport options
-   *
-   * @param webSocketTransportOptions WebSocket transport options
-   * @return a reference to this, so the API can be used fluently
-   */
-  public EventBusClientOptions setWebSocketTransportOptions(WebSocketTransportOptions webSocketTransportOptions) {
-    if (webSocketTransportOptions == null) {
-      throw new IllegalArgumentException("webSocketTransportOptions must not be null");
-    }
-    this.webSocketTransportOptions = webSocketTransportOptions;
-    return this;
-  }
-
-  /**
-   * Set the WebSocket transport options
-   *
-   * @return WebSocket transport options
-   */
-  public WebSocketTransportOptions getWebSocketTransportOptions() {
-    return this.webSocketTransportOptions;
-  }
-
-  /**
-   * Set the HTTP transport options
-   *
-   * @param httpTransportOptions HTTP transport options
-   * @return a reference to this, so the API can be used fluently
-   */
-  public EventBusClientOptions setHttpTransportOptions(HttpTransportOptions httpTransportOptions) {
-    if (httpTransportOptions == null) {
-      throw new IllegalArgumentException("httpTransportOptions must not be null");
-    }
-    this.httpTransportOptions = httpTransportOptions;
-    return this;
-  }
-
-  /**
-   * Get the HTTP transport options
-   *
-   * @return HTTP transport options
-   */
-  public HttpTransportOptions getHttpTransportOptions() {
-    return this.httpTransportOptions;
+  public <T extends TransportOptions> T getTransportOptions() {
+    return (T) this.transportOptions;
   }
 
   /**

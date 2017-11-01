@@ -3,7 +3,7 @@ package io.vertx.ext.eventbus.client.transport;
 import io.netty.channel.*;
 import io.netty.handler.codec.http.*;
 import io.vertx.ext.eventbus.client.Handler;
-import io.vertx.ext.eventbus.client.options.EventBusClientOptions;
+import io.vertx.ext.eventbus.client.EventBusClientOptions;
 
 /**
  * @author <a href="mailto:pl@linux.com">Phil Lehmann</a>

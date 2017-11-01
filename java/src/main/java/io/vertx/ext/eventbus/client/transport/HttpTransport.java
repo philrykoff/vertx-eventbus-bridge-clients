@@ -16,7 +16,7 @@ import io.netty.util.concurrent.GenericFutureListener;
 import io.netty.util.concurrent.Promise;
 import io.vertx.ext.eventbus.client.Handler;
 import io.vertx.ext.eventbus.client.json.JsonCodec;
-import io.vertx.ext.eventbus.client.options.EventBusClientOptions;
+import io.vertx.ext.eventbus.client.EventBusClientOptions;
 import io.vertx.ext.eventbus.client.logging.Logger;
 import io.vertx.ext.eventbus.client.logging.LoggerFactory;
 import io.vertx.ext.eventbus.client.options.HttpTransportOptions;
@@ -74,7 +74,7 @@ public class HttpTransport extends Transport {
   public Future<Void> connect() {
     this.sessionPart = "/" + serverId + "/" + UUID.randomUUID().toString();
     Promise<Void> connectFuture = this.group.next().newPromise();
-    if(HttpTransport.this.options.getHttpTransportOptions().isStreaming()) {
+    if(HttpTransport.this.options.<HttpTransportOptions>getTransportOptions().isStreaming()) {
       HttpTransport.this.performXhrStreaming(connectFuture);
     } else {
       HttpTransport.this.performXhr(connectFuture);
@@ -167,7 +167,7 @@ public class HttpTransport extends Transport {
 
       if (content instanceof LastHttpContent) {
         if(this.connected.get()) {
-          if(this.options.getHttpTransportOptions().isStreaming()) {
+          if(this.options.<HttpTransportOptions>getTransportOptions().isStreaming()) {
             this.performXhrStreaming(null);
           } else {
             this.performXhr(null);
@@ -228,7 +228,7 @@ public class HttpTransport extends Transport {
   private synchronized Future<Void> performRequest(HttpMethod method, String address, AddSessionPart addSessionPart, String body, boolean aggregateChunks, boolean isXhrFetchRequest, Handler<Object> responseHandler) {
 
     final EventBusClientOptions options = this.options;
-    final HttpTransportOptions httpOptions = this.options.getHttpTransportOptions();
+    final HttpTransportOptions httpOptions = this.options.<HttpTransportOptions>getTransportOptions();
     Promise<Void> responseFuture = this.group.next().newPromise();
     final AtomicReference<HttpResponseStatus> responseStatus = new AtomicReference<>(null);
 

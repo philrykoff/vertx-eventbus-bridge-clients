@@ -4,12 +4,9 @@ import io.netty.channel.*;
 import io.netty.handler.proxy.*;
 import io.netty.handler.ssl.SslHandler;
 import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
-import io.netty.handler.timeout.IdleStateEvent;
-import io.netty.handler.timeout.IdleStateHandler;
 import io.netty.util.concurrent.Future;
 import io.netty.util.concurrent.GenericFutureListener;
-import io.vertx.ext.eventbus.client.EventBusClient;
-import io.vertx.ext.eventbus.client.options.EventBusClientOptions;
+import io.vertx.ext.eventbus.client.EventBusClientOptions;
 import io.vertx.ext.eventbus.client.options.ProxyOptions;
 import io.vertx.ext.eventbus.client.options.ProxyType;
 import io.vertx.ext.eventbus.client.options.TrustOptions;
@@ -19,7 +16,6 @@ import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.security.KeyStore;
 import java.security.SecureRandom;
-import java.util.concurrent.TimeUnit;
 
 /**
  * @author <a href="mailto:julien@julienviet.com">Julien Viet</a>
@@ -45,6 +41,16 @@ abstract class TransportChannel extends ChannelInitializer {
     final ChannelPipeline pipeline = channel.pipeline();
 
     channel.config().setConnectTimeoutMillis(this.options.getConnectTimeout());
+
+    if(this.options.getProxyOptions() == null && !this.options.isSsl()) {
+      pipeline.addLast(new ChannelInboundHandlerAdapter() {
+        @Override
+        public void channelActive(ChannelHandlerContext ctx) throws Exception {
+          super.channelActive(ctx);
+          TransportChannel.this.handshakeCompleteHandler(channel);
+        }
+      });
+    }
 
     if(this.options.getProxyOptions() != null) {
       ProxyOptions proxyOptions = this.options.getProxyOptions();
@@ -81,8 +87,18 @@ abstract class TransportChannel extends ChannelInitializer {
           if (evt instanceof ProxyConnectionEvent) {
             pipeline.remove(proxyHandler);
             pipeline.remove(this);
+            if(!TransportChannel.this.options.isSsl()) {
+              TransportChannel.this.handshakeCompleteHandler(channel);
+            }
           }
           ctx.fireUserEventTriggered(evt);
+        }
+      });
+      pipeline.addLast("proxyExceptionHandler", new ChannelHandlerAdapter() {
+        @Override
+        public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
+          // TODO: ignore if closed
+          transport.handleError("A proxy exception occured.", cause);
         }
       });
     }
@@ -119,7 +135,7 @@ abstract class TransportChannel extends ChannelInitializer {
           @Override
           public void operationComplete(Future<Channel> future) {
             if(future.isSuccess()) {
-              TransportChannel.this.sslConnectedHandler(future.getNow());
+              TransportChannel.this.handshakeCompleteHandler(future.getNow());
             }
           }
         });
@@ -134,13 +150,13 @@ abstract class TransportChannel extends ChannelInitializer {
   }
 
   /**
-   * This method is being called by {@code TransportChannel} when the TLS handshake has been completed successfully.
+   * This method is being called by {@code TransportChannel} when the proxy & TLS handshake has been completed successfully.
    *
    * It can be overriden by implementations of {@code TransportChannel} to perform tasks.
    *
    * @param channel the channel for which the TLS handshake has been completed
    */
-  void sslConnectedHandler(Channel channel) {
+  void handshakeCompleteHandler(Channel channel) {
     // NOOP
   }
 

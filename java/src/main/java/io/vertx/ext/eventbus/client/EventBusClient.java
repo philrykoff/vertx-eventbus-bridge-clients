@@ -8,7 +8,6 @@ import io.vertx.ext.eventbus.client.json.GsonCodec;
 import io.vertx.ext.eventbus.client.json.JsonCodec;
 import io.vertx.ext.eventbus.client.logging.Logger;
 import io.vertx.ext.eventbus.client.logging.LoggerFactory;
-import io.vertx.ext.eventbus.client.options.EventBusClientOptions;
 import io.vertx.ext.eventbus.client.options.HttpTransportOptions;
 import io.vertx.ext.eventbus.client.options.TcpTransportOptions;
 import io.vertx.ext.eventbus.client.options.WebSocketTransportOptions;
@@ -46,8 +45,8 @@ public class EventBusClient {
     if (eventBusClientOptions == null) {
       eventBusClientOptions = new EventBusClientOptions();
     }
-    if(eventBusClientOptions.getTcpTransportOptions() == null) {
-      eventBusClientOptions.setTcpTransportOptions(new TcpTransportOptions());
+    if(eventBusClientOptions.getTransportOptions() == null) {
+      eventBusClientOptions.setTransportOptions(new TcpTransportOptions());
     }
 
     NioEventLoopGroup group = new NioEventLoopGroup(1);
@@ -74,8 +73,8 @@ public class EventBusClient {
     if (eventBusClientOptions == null) {
       eventBusClientOptions = new EventBusClientOptions();
     }
-    if(eventBusClientOptions.getWebSocketTransportOptions() == null) {
-      eventBusClientOptions.setWebSocketTransportOptions(new WebSocketTransportOptions());
+    if(eventBusClientOptions.getTransportOptions() == null) {
+      eventBusClientOptions.setTransportOptions(new WebSocketTransportOptions());
     }
 
     NioEventLoopGroup group = new NioEventLoopGroup(1);
@@ -102,25 +101,24 @@ public class EventBusClient {
     if (eventBusClientOptions == null) {
       eventBusClientOptions = new EventBusClientOptions();
     }
-    if(eventBusClientOptions.getHttpTransportOptions() == null) {
-      eventBusClientOptions.setHttpTransportOptions(new HttpTransportOptions());
+    if(eventBusClientOptions.getTransportOptions() == null) {
+      eventBusClientOptions.setTransportOptions(new HttpTransportOptions());
     }
 
     NioEventLoopGroup group = new NioEventLoopGroup(1);
     return new EventBusClient(group, new HttpTransport(group, eventBusClientOptions, jsonCodec), eventBusClientOptions, jsonCodec);
   }
 
-  private Logger logger;
-
   private DeliveryOptions defaultOptions = new DeliveryOptions();
-  private final NioEventLoopGroup group;
   private final Transport transport;
+  private final NioEventLoopGroup group;
   private final EventBusClientOptions eventBusClientOptions;
   private final JsonCodec codec;
+  private Logger logger;
 
   private final ConcurrentMap<String, HandlerList> consumerMap = new ConcurrentHashMap<>();
-  private Future<Void> connectFuture;
   private ScheduledFuture<?> pingPeriodic;
+  private Future<Void> connectFuture;
   private ScheduledFuture<?> reconnectFuture;
   private boolean initializedTransport;
   private boolean connected;
@@ -173,14 +171,13 @@ public class EventBusClient {
           pingPeriodic = group.next().scheduleAtFixedRate(new Runnable() {
                                                             @Override
                                                             public void run() {
-                                                                EventBusClient.this.send("{\"type\":\"ping\"}");
+                                                              send(codec.encode(Collections.singletonMap("type", "ping")));
                                                             }
                                                           },
             EventBusClient.this.eventBusClientOptions.getPingInterval(),
             EventBusClient.this.eventBusClientOptions.getPingInterval(),
             TimeUnit.MILLISECONDS);
           connected = true;
-          // TODO: only reset this to 0 when this was no short lived connection (e.g. < 5 secs)?
           reconnectTries = 0;
           connectFuture = null;
 
@@ -232,9 +229,9 @@ public class EventBusClient {
     Integer port = EventBusClient.this.eventBusClientOptions.getPort();
 
     if(EventBusClient.this.eventBusClientOptions.getProxyOptions() != null) {
-      logger.info("Connecting to bridge at " + host + ":" + port + " (via " + EventBusClient.this.eventBusClientOptions.getProxyOptions().toString() + ") using " + this.transport.getClass().getSimpleName() + "...");
+      logger.info("Connecting to bridge at " + host + ":" + port + " (via " + EventBusClient.this.eventBusClientOptions.getProxyOptions().toString() + ") using " + (EventBusClient.this.eventBusClientOptions.isSsl() ? "TLS secured " : "") + this.transport.getClass().getSimpleName() + "...");
     } else {
-      logger.info("Connecting to bridge at " + host + ":" + port + " using " + this.transport.getClass().getSimpleName() + "...");
+      logger.info("Connecting to bridge at " + host + ":" + port + " using " + (EventBusClient.this.eventBusClientOptions.isSsl() ? "TLS secured " : "") + this.transport.getClass().getSimpleName() + "...");
     }
 
     connectFuture = transport.connect()
@@ -278,8 +275,10 @@ public class EventBusClient {
     // First register, then send pending tasks, as those tasks may result in messages being sent to registered channels
     if(this.eventBusClientOptions.getReregisterChannelsUponConnect()) {
       for(String address : consumerMap.keySet()) {
-        logger.info("Registering address: " + address);
-        send("register", address, null, null, null);
+        if(consumerMap.get(address).reregisterAtServer) {
+          logger.info("Registering address: " + address);
+          send("register", address, null, this.defaultOptions == null ? null : this.defaultOptions.getHeaders(), null);
+        }
       }
     }
 
@@ -438,7 +437,7 @@ public class EventBusClient {
           if (registered.compareAndSet(true, false)) {
             this.cancelTimeout();
             unregister(this, false);
-            replyHandler.handle(new AsyncResult<Message<T>>(msg, null));
+            replyHandler.handle(AsyncResult.<Message<T>>success(msg));
           }
         }
         @Override
@@ -446,7 +445,7 @@ public class EventBusClient {
           if (registered.compareAndSet(true, false)) {
             this.cancelTimeout();
             unregister(this, false);
-            replyHandler.handle(new AsyncResult<Message<T>>(null, err));
+            replyHandler.handle(AsyncResult.<Message<T>>failure(err));
           }
         }
       };
@@ -476,7 +475,7 @@ public class EventBusClient {
    *
    */
   public EventBusClient publish(String address, Object message) {
-    send("publish", address, message, null, null);
+    send("publish", address, message, defaultOptions.getHeaders(), null);
     return this;
   }
 
@@ -502,7 +501,7 @@ public class EventBusClient {
    * @return the event bus message consumer
    */
   public <T> MessageConsumer<T> consumer(String address, Handler<Message<T>> handler) {
-    return consumer(address, null, handler);
+    return consumer(address, defaultOptions, handler);
   }
 
   /**
@@ -521,50 +520,52 @@ public class EventBusClient {
 
   private void register(MessageHandler<?> handler, Map<String, String> headers, boolean atServer) {
     String address = handler.address();
-    HandlerList result = consumerMap.compute(address, (k, v) -> {
-      if (v == null) {
-        return new HandlerList(Collections.singletonList(handler));
+    synchronized (consumerMap) {
+      HandlerList consumers = consumerMap.get(address);
+      List<MessageHandler> handlers;
+      if (consumers == null) {
+        handlers = Collections.singletonList((MessageHandler) handler);
+        // If we would just create a task for it, that would be send upon connection creation redundandly to all other re-registered handlers
+        if(atServer) {
+          if(connected) {
+            logger.info("Registering address: " + address);
+            send("register", address, null, headers, null);
+          } else {
+            initializeTransport();
+            connectTransport();
+          }
+        }
       } else {
-        ArrayList<MessageHandler> l = new ArrayList<>(v.handlers);
-        l.add(handler);
-        return new HandlerList(l);
+        ArrayList<MessageHandler> tmp = new ArrayList<>(consumers.handlers);
+        tmp.add(handler);
+        handlers = new ArrayList<>(tmp);
       }
-    });
-    if (atServer && result.handlers.size() == 1) {
-
-      // If we would just create a task for it, that would be send upon connection creation redundandly to all other re-registered handlers
-      if(!connected) {
-        initializeTransport();
-        connectTransport();
-        return;
-      }
-
-      logger.info("Registering address: " + address);
-      send("register", address, null, headers, null);
+      consumerMap.put(address, new HandlerList(handlers, atServer));
     }
   }
 
   void unregister(MessageHandler<?> handler, boolean atServer) {
     String address = handler.address();
-    HandlerList result = consumerMap.compute(address, (k, v) -> {
-      if (v.handlers.size() == 1) {
-        if (v.handlers.get(0) == handler) {
-          return null;
-        } else {
-          return v;
-        }
-      } else {
-        ArrayList<MessageHandler> list = new ArrayList<MessageHandler>(v.handlers);
-        list.remove(handler);
-        return new HandlerList(list);
+    synchronized (consumerMap) {
+      HandlerList consumers = consumerMap.get(address);
+      if (consumers == null) {
+        return;
       }
-    });
-    if (atServer && result == null) {
-      Map<String, Object> obj = new HashMap<>();
-      obj.put("type", "unregister");
-      obj.put("address", address);
-      final String msg = codec.encode(obj);
-      send(msg);
+      if (!consumers.handlers.contains(handler)) {
+        return;
+      }
+      List<MessageHandler> handlers = new ArrayList<>(consumers.handlers);
+      handlers.remove(handler);
+      if (atServer && handlers.isEmpty()) {
+        consumerMap.remove(address);
+        Map<String, Object> obj = new HashMap<>();
+        obj.put("type", "unregister");
+        obj.put("address", address);
+        final String msg = codec.encode(obj);
+        send(msg);
+      } else {
+        consumerMap.put(address, new HandlerList(new ArrayList<>(handlers), atServer));
+      }
     }
   }
 
@@ -653,9 +654,11 @@ public class EventBusClient {
   private class HandlerList {
 
     private final List<MessageHandler> handlers;
+    private final boolean reregisterAtServer;
 
-    HandlerList(List<MessageHandler> handlers) {
+    HandlerList(List<MessageHandler> handlers, boolean reregisterAtServer) {
       this.handlers = handlers;
+      this.reregisterAtServer = reregisterAtServer;
     }
 
     void send(Message message) {

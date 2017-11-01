@@ -3,7 +3,7 @@ package io.vertx.ext.eventbus.client.options;
 /**
  * @author <a href="mailto:pl@linux.com">Phil Lehmann</a>
  */
-public class HttpTransportOptions {
+public class HttpTransportOptions implements TransportOptions {
 
   /**
    * The default path to connect the HTTP client to = /eventbus

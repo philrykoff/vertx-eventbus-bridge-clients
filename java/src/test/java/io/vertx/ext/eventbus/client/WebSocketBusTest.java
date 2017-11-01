@@ -3,12 +3,12 @@ package io.vertx.ext.eventbus.client;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.eventbus.client.json.GsonCodec;
 import io.vertx.ext.eventbus.client.json.JsonCodec;
-import io.vertx.ext.eventbus.client.options.EventBusClientOptions;
 import io.vertx.ext.eventbus.client.options.WebSocketTransportOptions;
 import io.vertx.ext.unit.Async;
 import io.vertx.ext.unit.TestContext;
 import org.junit.*;
 
+import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
@@ -17,16 +17,43 @@ import java.util.UUID;
 /**
  * @author <a href="mailto:julien@julienviet.com">Julien Viet</a>
  */
-public class WebSocketBusTest extends HttpLongPollingBusTest {
+public class WebSocketBusTest extends HttpStreamingBusTest {
+
+  @BeforeClass
+  public static void beforeClass() throws UnknownHostException {
+    HttpLongPollingBusTest.beforeClass();
+  }
+
+  @AfterClass
+  public static void afterClass() {
+    HttpLongPollingBusTest.afterClass();
+  }
 
   @Override
   protected EventBusClient client(TestContext ctx) {
     EventBusClientOptions options = new EventBusClientOptions().setPort(7000)
-                                                               .setWebSocketTransportOptions(new WebSocketTransportOptions().setPath("/eventbus-test")
+                                                               .setTransportOptions(new WebSocketTransportOptions().setPath("/eventbus-test")
                                                                                                                             .setMaxWebsocketFrameSize(MAX_WEBSOCKET_FRAME_SIZE));
     ctx.put("clientOptions", options);
     ctx.put("codec", new GsonCodec());
     return EventBusClient.websocket(options);
+  }
+
+  @Override
+  @Test
+  public void testIdleTimeout(final TestContext ctx) throws Exception {
+    final Async async = ctx.async(5);
+    EventBusClient client = client(ctx);
+
+    ctx.<EventBusClientOptions>get("clientOptions").setAutoReconnectInterval(0).<WebSocketTransportOptions>getTransportOptions().setIdleTimeout(100);
+
+    client.connectedHandler(event -> {
+      countDownAndCloseClient(async, client);
+    });
+
+    client.connect();
+
+    async.awaitSuccess(3000);
   }
 
   @Test
@@ -45,28 +72,10 @@ public class WebSocketBusTest extends HttpLongPollingBusTest {
       ctx.assertTrue(response.succeeded(), "Message within MaxWebSocketFrameSize limit should succeed.");
       countDownAndCloseClient(async, client);
     });
-    client.send("server_addr", getStringForJsonObjectTargetByteSize(ctx, "server_addr", 270000), response -> {
+    client.send("server_addr", getStringForJsonObjectTargetByteSize(ctx, "server_addr", MAX_WEBSOCKET_FRAME_SIZE - 8), response -> {
       ctx.assertTrue(response.succeeded(), "Message within MaxWebSocketFrameSize limit should succeed.");
       countDownAndCloseClient(async, client);
     });
-  }
-
-  @Override
-  @Test
-  public void testIdleTimeout(final TestContext ctx) throws Exception
-  {
-    final Async async = ctx.async(5);
-    EventBusClient client = client(ctx);
-
-    ctx.<EventBusClientOptions>get("clientOptions").setAutoReconnectInterval(0).getWebSocketTransportOptions().setIdleTimeout(100);
-
-    client.connectedHandler(event -> {
-      countDownAndCloseClient(async, client);
-    });
-
-    client.connect();
-
-    async.awaitSuccess(1000);
   }
 
   @Test
@@ -91,7 +100,7 @@ public class WebSocketBusTest extends HttpLongPollingBusTest {
 
     client.connectedHandler(event -> {
 
-      client.send("server_addr", getStringForJsonObjectTargetByteSize(ctx, "server_addr", MAX_WEBSOCKET_FRAME_SIZE + 16), response -> {
+      client.send("server_addr", getStringForJsonObjectTargetByteSize(ctx, "server_addr", MAX_WEBSOCKET_FRAME_SIZE  *10), response -> {
         // This code will be reached when the request times out - or never, as the SockJS server just drops the connection instead of sending a proper error response
         ctx.assertFalse(response.succeeded(), "Should not be able to send more than MAX_WEBSOCKET_FRAME_SIZE");
       });

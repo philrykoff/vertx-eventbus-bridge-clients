@@ -3,7 +3,7 @@ package io.vertx.ext.eventbus.client.options;
 /**
  * Stub
  */
-public class TcpTransportOptions {
+public class TcpTransportOptions implements TransportOptions {
 
   /**
    * Default idle timeout = 0 ms (0 = disabled)

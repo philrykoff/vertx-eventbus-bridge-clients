@@ -5,6 +5,7 @@ import io.vertx.core.http.HttpServerOptions;
 import io.vertx.core.net.JksOptions;
 import io.vertx.ext.bridge.PermittedOptions;
 import io.vertx.ext.eventbus.client.json.GsonCodec;
+import io.vertx.ext.eventbus.client.logging.LoggerFactory;
 import io.vertx.ext.eventbus.client.options.*;
 import io.vertx.ext.unit.Async;
 import io.vertx.ext.unit.TestContext;
@@ -17,6 +18,8 @@ import org.junit.Test;
 import org.littleshoot.proxy.HttpProxyServer;
 import org.littleshoot.proxy.impl.DefaultHttpProxyServer;
 
+import java.net.UnknownHostException;
+
 /**
  * @author <a href="mailto:julien@julienviet.com">Julien Viet</a>
  */
@@ -26,19 +29,21 @@ public class HttpLongPollingBusTest extends TcpBusTest {
   private static HttpProxyServer proxy;
 
   @BeforeClass
-  public static void beforeClass() {
+  public static void beforeClass() throws UnknownHostException {
+    TcpBusTest.beforeClass();
     proxy = DefaultHttpProxyServer.bootstrap().withPort(8000).withAllowLocalOnly(true).start();
   }
 
   @AfterClass
   public static void afterClass() {
+    TcpBusTest.afterClass();
     proxy.stop();
   }
 
   @Override
   protected EventBusClient client(TestContext ctx) {
     EventBusClientOptions options = new EventBusClientOptions().setPort(7000)
-                                                               .setHttpTransportOptions(new HttpTransportOptions().setPath("/eventbus-test").setStreaming(false));
+                                                               .setTransportOptions(new HttpTransportOptions().setPath("/eventbus-test").setStreaming(false));
     ctx.put("clientOptions", options);
     ctx.put("codec", new GsonCodec());
     return EventBusClient.http(options, new GsonCodec());
@@ -53,11 +58,11 @@ public class HttpLongPollingBusTest extends TcpBusTest {
       .addOutboundPermitted(new PermittedOptions().setAddressRegex(".*"));
     SockJSHandler ebHandler = SockJSHandler.create(vertx).bridge(opts);
     router.route("/eventbus-test/*").handler(ebHandler);
-    HttpServer server = vertx.createHttpServer(new HttpServerOptions().setMaxWebsocketFrameSize(Integer.MAX_VALUE))
+    HttpServer server = vertx.createHttpServer(new HttpServerOptions().setMaxWebsocketFrameSize(MAX_WEBSOCKET_FRAME_SIZE).setMaxWebsocketMessageSize(MAX_WEBSOCKET_FRAME_SIZE))
       .requestHandler(router::accept)
       .listen(7000, ctx.asyncAssertSuccess());
 
-    vertx.createHttpServer(new HttpServerOptions().setMaxWebsocketFrameSize(Integer.MAX_VALUE).setSsl(true).setKeyStoreOptions(
+    vertx.createHttpServer(new HttpServerOptions().setMaxWebsocketFrameSize(MAX_WEBSOCKET_FRAME_SIZE).setMaxWebsocketMessageSize(MAX_WEBSOCKET_FRAME_SIZE).setSsl(true).setKeyStoreOptions(
       new JksOptions().setPath("server-keystore.jks").setPassword("wibble")
     ))
       .requestHandler(router::accept)
@@ -85,9 +90,19 @@ public class HttpLongPollingBusTest extends TcpBusTest {
   }
 
   @Override
-  public void testIdleTimeout(final TestContext ctx) throws Exception
-  {
-    // Is not applicable to HttpTransport
+  public void testIdleTimeout(final TestContext ctx) throws Exception {
+    LoggerFactory.getLogger(HttpLongPollingBusTest.class).info("HTTP long polling transport does not support idle timeout.");
+  }
+
+  @Test
+  public void testProxyHttp(final TestContext ctx) {
+    final Async async = ctx.async();
+    EventBusClient client = client(ctx);
+
+    ctx.<EventBusClientOptions>get("clientOptions").setPort(7000).setAutoReconnect(false)
+      .setProxyOptions(new ProxyOptions(ProxyType.HTTP, "localhost", 8000));
+
+    performHelloWorld(ctx, async, client);
   }
 
   @Test
@@ -101,17 +116,6 @@ public class HttpLongPollingBusTest extends TcpBusTest {
     performHelloWorld(ctx, async, client);
 
     async.awaitSuccess(3000);
-  }
-
-  @Test
-  public void testProxyHttp(final TestContext ctx) {
-    final Async async = ctx.async();
-    EventBusClient client = client(ctx);
-
-    ctx.<EventBusClientOptions>get("clientOptions").setPort(7000).setAutoReconnect(false)
-      .setProxyOptions(new ProxyOptions(ProxyType.HTTP, "localhost", 8000));
-
-    performHelloWorld(ctx, async, client);
   }
 
   @Test

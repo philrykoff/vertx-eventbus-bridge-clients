@@ -5,14 +5,11 @@ import io.netty.channel.*;
 import io.netty.handler.codec.http.DefaultHttpHeaders;
 import io.netty.handler.codec.http.HttpClientCodec;
 import io.netty.handler.codec.http.HttpObjectAggregator;
-import io.netty.handler.codec.http.websocketx.BinaryWebSocketFrame;
-import io.netty.handler.codec.http.websocketx.WebSocketClientHandshaker;
-import io.netty.handler.codec.http.websocketx.WebSocketClientHandshakerFactory;
-import io.netty.handler.codec.http.websocketx.WebSocketClientProtocolHandler;
-import io.netty.handler.codec.http.websocketx.WebSocketVersion;
+import io.netty.handler.codec.http.websocketx.*;
 import io.netty.handler.timeout.IdleStateEvent;
 import io.netty.handler.timeout.IdleStateHandler;
-import io.vertx.ext.eventbus.client.options.EventBusClientOptions;
+import io.vertx.ext.eventbus.client.EventBusClientOptions;
+import io.vertx.ext.eventbus.client.options.WebSocketTransportOptions;
 
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -36,12 +33,14 @@ class WebSocketTransportChannel extends TransportChannel {
   protected void initChannel(Channel channel) throws Exception {
     super.initChannel(channel);
 
+    final WebSocketTransportOptions options = this.options.<WebSocketTransportOptions>getTransportOptions();
+
     StringBuilder url = new StringBuilder();
     url.append("ws");
     if(this.options.isSsl()) {
       url.append("s");
     }
-    url.append("://").append(this.options.getHost()).append(this.options.getWebSocketTransportOptions().getPath()).append("/websocket");
+    url.append("://").append(this.options.getHost()).append(options.getPath()).append("/websocket");
 
     WebSocketClientHandshaker handshaker =
       WebSocketClientHandshakerFactory.newHandshaker(new URI(url.toString()),
@@ -49,18 +48,18 @@ class WebSocketTransportChannel extends TransportChannel {
                                                      null,
                                                      false,
                                                      new DefaultHttpHeaders(),
-                                                     this.options.getWebSocketTransportOptions().getMaxWebsocketFrameSize());
+        options.getMaxWebsocketFrameSize());
     WebSocketClientProtocolHandler handler = new WebSocketClientProtocolHandler(handshaker);
 
     ChannelPipeline pipeline = channel.pipeline();
 
-    if (this.options.getWebSocketTransportOptions().getIdleTimeout() > 0) {
-      pipeline.addLast("idleStateHandler", new IdleStateHandler(0, 0, this.options.getWebSocketTransportOptions().getIdleTimeout(), TimeUnit.MILLISECONDS));
+    if (options.getIdleTimeout() > 0) {
+      pipeline.addLast("idleStateHandler", new IdleStateHandler(0, 0, options.getIdleTimeout(), TimeUnit.MILLISECONDS));
       pipeline.addLast("idleEventHandler", new ChannelDuplexHandler() {
         @Override
         public void userEventTriggered(ChannelHandlerContext ctx, Object evt) throws Exception {
           if (evt instanceof IdleStateEvent) {
-            ctx.close();
+            handshaker.close(channel, new CloseWebSocketFrame());
           }
         }
       });
