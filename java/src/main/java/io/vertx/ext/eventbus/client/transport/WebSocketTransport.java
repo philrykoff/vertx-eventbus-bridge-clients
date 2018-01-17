@@ -20,7 +20,7 @@ public class WebSocketTransport extends Transport {
 
   @Override
   public Future<Void> connect() {
-    this.channel = new WebSocketTransportChannel(this, options);
+    this.channel = new WebSocketTransportChannel(this);
     this.bootstrap.handler(this.channel);
     return this.bootstrap.connect(this.options.getHost(), this.options.getPort());
   }
@@ -39,5 +39,10 @@ public class WebSocketTransport extends Transport {
       return group.next().<Void>newFailedFuture(new Throwable("Could not close unconnected transport."));
     }
     return this.channel.close();
+  }
+
+  @Override
+  public String toString() {
+    return "websocket transport";
   }
 }

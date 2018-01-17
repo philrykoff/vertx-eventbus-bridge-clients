@@ -1,31 +1,41 @@
 package io.vertx.ext.eventbus.client.transport;
 
+import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
-import io.netty.channel.Channel;
-import io.netty.channel.ChannelFuture;
+import io.netty.channel.*;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.handler.codec.http.*;
 import io.netty.handler.codec.http.cookie.*;
-import io.netty.handler.codec.http.cookie.ClientCookieEncoder;
 import io.netty.handler.codec.http.cookie.Cookie;
+import io.netty.handler.proxy.ProxyConnectException;
+import io.netty.handler.proxy.ProxyHandler;
+import io.netty.resolver.DefaultAddressResolverGroup;
+import io.netty.util.AsciiString;
 import io.netty.util.CharsetUtil;
+import io.netty.util.NetUtil;
 import io.netty.util.concurrent.Future;
 import io.netty.util.concurrent.GenericFutureListener;
 import io.netty.util.concurrent.Promise;
+import io.netty.util.concurrent.SucceededFuture;
 import io.vertx.ext.eventbus.client.Handler;
 import io.vertx.ext.eventbus.client.json.JsonCodec;
 import io.vertx.ext.eventbus.client.EventBusClientOptions;
 import io.vertx.ext.eventbus.client.logging.Logger;
 import io.vertx.ext.eventbus.client.logging.LoggerFactory;
 import io.vertx.ext.eventbus.client.options.HttpTransportOptions;
+import io.vertx.ext.eventbus.client.options.ProxyOptions;
+import io.vertx.ext.eventbus.client.options.ProxyType;
 
+import java.io.UnsupportedEncodingException;
+import java.net.InetSocketAddress;
+import java.net.SocketAddress;
 import java.security.SecureRandom;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 import java.util.UUID;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -48,6 +58,13 @@ public class HttpTransport extends Transport {
     BeforeAddress
   }
 
+  private enum State {
+    Created,
+    Connecting,
+    Connected,
+    Closed
+  }
+
   private Logger logger;
   private JsonCodec jsonCodec;
 
@@ -56,8 +73,8 @@ public class HttpTransport extends Transport {
 
   private Cookie jSessionIdCookie = null;
 
-  private AtomicBoolean connected;
-  private AtomicBoolean closed;
+  private Promise<Void> connectFuture;
+  private State state;
   private Channel currentXhrFetchRequestChannel;
 
   public HttpTransport(NioEventLoopGroup group, EventBusClientOptions options, JsonCodec jsonCodec) {
@@ -66,30 +83,39 @@ public class HttpTransport extends Transport {
     this.serverId = String.format("%03d", new SecureRandom().nextInt(1000));
     this.logger = LoggerFactory.getLogger(HttpTransport.class);
     this.jsonCodec = jsonCodec;
-    this.connected = new AtomicBoolean(false);
-    this.closed = new AtomicBoolean(false);
+    this.state = State.Created;
   }
 
   @Override
   public Future<Void> connect() {
     this.sessionPart = "/" + serverId + "/" + UUID.randomUUID().toString();
-    Promise<Void> connectFuture = this.group.next().newPromise();
+    this.connectFuture = this.group.next().newPromise();
+    this.state = State.Connecting;
+    this.performConnect();
+    return this.connectFuture;
+  }
+
+  @Override
+  public String toString() {
+    return (HttpTransport.this.options.<HttpTransportOptions>getTransportOptions().isStreaming() ? "streaming" : "long-polling") + " HTTP transport";
+  }
+
+  private void performConnect() {
     if(HttpTransport.this.options.<HttpTransportOptions>getTransportOptions().isStreaming()) {
-      HttpTransport.this.performXhrStreaming(connectFuture);
+      HttpTransport.this.performXhrStreaming();
     } else {
-      HttpTransport.this.performXhr(connectFuture);
+      HttpTransport.this.performXhr();
     }
-    return connectFuture;
   }
 
   /**
    * Xhr polling url: /<server>/<session>/xhr
    */
-  private Future<Void> performXhr(Promise<Void> connectFuture) {
+  private Future<Void> performXhr() {
     return this.performRequest(HttpMethod.POST, "/xhr", AddSessionPart.BeforeAddress, null, true, true, new Handler<Object>() {
       @Override
       public void handle(Object msg) {
-        HttpTransport.this.handleMessages(connectFuture, msg);
+        HttpTransport.this.handleMessages(msg);
       }
     });
   }
@@ -97,11 +123,11 @@ public class HttpTransport extends Transport {
   /**
    * Xhr streaming url: /<server>/<session>/xhr_streaming
    */
-  private Future<Void> performXhrStreaming(Promise<Void> connectFuture) {
+  private Future<Void> performXhrStreaming() {
     return this.performRequest(HttpMethod.POST, "/xhr_streaming", AddSessionPart.BeforeAddress, null, false, true, new Handler<Object>() {
       @Override
       public void handle(Object msg) {
-        HttpTransport.this.handleMessages(connectFuture, msg);
+        HttpTransport.this.handleMessages(msg);
       }
     });
   }
@@ -122,10 +148,9 @@ public class HttpTransport extends Transport {
    *      This may happen multiple times. Close frame contains a code and a string explaining a reason of closure,
    *      like: c[3000,"Go away!"] or c[2010,"Another connection still open"] (only one polling con. is allowed).
    *
-   * @param connectFuture the connect future, which is being completed by handleMessages upon receiving a positive response
    * @param msg the performRequest responseHandler object
    */
-  private void handleMessages(Promise<Void> connectFuture, Object msg) {
+  private void handleMessages(Object msg) {
     if (msg instanceof HttpContent) {
       HttpContent content = (HttpContent) msg;
       String message = content.content().toString(CharsetUtil.UTF_8);
@@ -134,14 +159,12 @@ public class HttpTransport extends Transport {
         char command = message.charAt(0);
         switch (command) {
           case 'o':
-            this.connected.set(true);
-            this.closed.set(false);
-            if(connectFuture != null) {
-              synchronized (HttpTransport.this) {
-                if(!connectFuture.isDone()) {
-                  connectFuture.setSuccess(null);
-                  this.connectedHandler.handle(null);
-                }
+            this.state = State.Connected;
+            synchronized (HttpTransport.this) {
+              if(this.connectFuture != null && !this.connectFuture.isDone()) {
+                this.connectFuture.setSuccess(null);
+                this.connectFuture = null;
+                this.connectedHandler.handle(null);
               }
             }
             break;
@@ -155,24 +178,21 @@ public class HttpTransport extends Transport {
             }
             break;
           case 'c':
-            if(this.connected.getAndSet(false)) {
+            if(this.state == State.Connected) {
               this.logger.info("Server sent close command: " + message);
-              this.close(false);
+              this.close(null, false);
+            } else {
+              this.close(new Throwable("Server sent close command although we did not connect, yet."), false);
             }
+            return;
           default:
-            this.logger.error("Unexpected command received from server: " + command);
-            break;
+            this.close(new Throwable("Unexpected command '" + command + "' received from server. Complete message: " + message), false);
+            return;
         }
       }
 
       if (content instanceof LastHttpContent) {
-        if(this.connected.get()) {
-          if(this.options.<HttpTransportOptions>getTransportOptions().isStreaming()) {
-            this.performXhrStreaming(null);
-          } else {
-            this.performXhr(null);
-          }
-        }
+        this.performConnect();
       }
     }
   }
@@ -189,7 +209,25 @@ public class HttpTransport extends Transport {
       this.handleError("Could not send message.", new Throwable("Message must not be null."));
       return null;
     }
-    return this.performRequest(HttpMethod.POST, "/xhr_send", AddSessionPart.BeforeAddress, "[\"" + message.replace("\"", "\\\"") + "\"]", true, false, this.createLogHandler("/xhr_send"));
+    return this.performRequest(HttpMethod.POST, "/xhr_send", AddSessionPart.BeforeAddress, "[\"" + message.replace("\"", "\\\"") + "\"]", true, false, new Handler<Object>() {
+      @Override
+      public void handle(Object msg) {
+        if (msg instanceof HttpResponse) {
+          HttpResponse response = (HttpResponse) msg;
+          if(response.status().code() != 204)
+          {
+            HttpTransport.this.close(new Throwable("Unexpected /xhr_send response status code '" + response.status().code() + "' received from server."), false);
+          }
+        }
+        if (msg instanceof HttpContent) {
+          HttpContent content = (HttpContent) msg;
+          String data = content.content().toString(CharsetUtil.UTF_8);
+          if(data.length() > 0) {
+            HttpTransport.this.close(new Throwable("Unexpected /xhr_send response content: '" + data + "'."), false);
+          }
+        }
+      }
+    });
   }
 
   /**
@@ -199,21 +237,6 @@ public class HttpTransport extends Transport {
    */
   private Future<Void> performClose() {
     return this.performRequest(HttpMethod.POST, "/close", AddSessionPart.AfterAddress, null, true, false, null);
-  }
-
-  private Handler<Object> createLogHandler(String address) {
-    return new Handler<Object>() {
-      @Override
-      public void handle(Object msg) {
-        if (msg instanceof HttpContent) {
-          HttpContent content = (HttpContent) msg;
-          String data = content.content().toString(CharsetUtil.UTF_8);
-          if(data.length() > 0) {
-            HttpTransport.this.logger.info("Request for address " + address + " returned response: " + data);
-          }
-        }
-      }
-    };
   }
 
   /**
@@ -227,136 +250,171 @@ public class HttpTransport extends Transport {
      */
   private synchronized Future<Void> performRequest(HttpMethod method, String address, AddSessionPart addSessionPart, String body, boolean aggregateChunks, boolean isXhrFetchRequest, Handler<Object> responseHandler) {
 
-    final EventBusClientOptions options = this.options;
     final HttpTransportOptions httpOptions = this.options.<HttpTransportOptions>getTransportOptions();
+    ProxyOptions proxyOptions = this.options.getProxyOptions();
+    boolean isDirectHttpProxy = proxyOptions != null && proxyOptions.getType() == ProxyType.HTTP_DIRECT;
+
     Promise<Void> responseFuture = this.group.next().newPromise();
     final AtomicReference<HttpResponseStatus> responseStatus = new AtomicReference<>(null);
 
-    this.bootstrap.handler(new HttpTransportChannel(this, this.options, aggregateChunks, false, new Handler<Object>() {
-      @Override
-      public void handle(Object msg) {
-        if(msg instanceof Throwable) {
-          HttpTransport.this.handleError(responseFuture, "Request for address " + address + " resulted in an exception.", (Throwable) msg);
-          return;
-        }
-        else if(responseHandler != null) {
-          responseHandler.handle(msg);
-        }
-        if (msg instanceof HttpResponse) {
-          HttpResponse response = (HttpResponse) msg;
-          responseStatus.set(response.status());
-          if (httpOptions.getEnableJSessionIdCookie() && !response.headers().isEmpty()) {
-            List<String> rawCookies = response.headers().getAll("Set-Cookie");
-            for(String rawCookie : rawCookies) {
-              Cookie cookie = ClientCookieDecoder.LAX.decode(rawCookie);
-              if(cookie.name().equals("JSESSIONID")) {
-                HttpTransport.this.jSessionIdCookie = cookie;
-              }
+    Bootstrap requestBootstrap = this.bootstrap.clone();
+    requestBootstrap.handler(new HttpTransportChannel(this, aggregateChunks,
+      new Handler<Channel>() {
+        @Override
+        public void handle(Channel channel) {
+
+          if(isXhrFetchRequest) {
+            HttpTransport.this.currentXhrFetchRequestChannel = channel;
+          }
+
+          String hostAndPort;
+          if((options.isSsl() && options.getPort() == 443) || (!options.isSsl() && options.getPort() == 80)) {
+            hostAndPort = options.getHost();
+          } else {
+            hostAndPort = options.getHost() + ":" + options.getPort();
+          }
+
+          StringBuilder url = new StringBuilder();
+          if(isDirectHttpProxy)
+          {
+            url.append("http");
+            if(options.isSsl()) {
+              url.append("s");
+            }
+            url.append("://").append(hostAndPort);
+          }
+          url.append(httpOptions.getPath());
+          if(addSessionPart == HttpTransport.AddSessionPart.BeforeAddress) {
+            url.append(HttpTransport.this.sessionPart);
+          }
+          url.append(address);
+          if(addSessionPart == HttpTransport.AddSessionPart.AfterAddress) {
+            url.append(HttpTransport.this.sessionPart);
+          }
+
+          FullHttpRequest request = new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, method, url.toString());
+
+          request.headers().set(HttpHeaderNames.HOST, hostAndPort);
+          request.headers().set(HttpHeaderNames.CONNECTION, "Keep-Alive");
+          request.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/plain;charset=UTF-8");
+
+          if(isDirectHttpProxy && proxyOptions.getUsername() != null) {
+            String authToken = proxyOptions.getUsername() + ":" + (proxyOptions.getPassword() != null ? proxyOptions.getPassword() : "");
+            try {
+              request.headers().set(HttpHeaderNames.PROXY_AUTHORIZATION, "Basic " + Base64.getEncoder().encodeToString(authToken.getBytes("utf-8")));
+            } catch (UnsupportedEncodingException e) {
+              HttpTransport.this.close(new Throwable("Could not encode proxy authentication header.", e), false);
+              return;
             }
           }
+
+          if(httpOptions.getEnableJSessionIdCookie()) {
+            request.headers().set("access-control-allow-origin", "true");
+            if(HttpTransport.this.jSessionIdCookie != null) {
+              request.headers().set(HttpHeaderNames.COOKIE, io.netty.handler.codec.http.cookie.ClientCookieEncoder.STRICT.encode(HttpTransport.this.jSessionIdCookie));
+            }
+          }
+
+          if(body != null) {
+            ByteBuf bodyBuffer = Unpooled.copiedBuffer(body, CharsetUtil.UTF_8);
+            request.headers().set(HttpHeaderNames.CONTENT_LENGTH, bodyBuffer.readableBytes());
+            request.content().clear().writeBytes(bodyBuffer);
+          }
+
+          ChannelFuture writeFuture = channel.writeAndFlush(request);
+          writeFuture.addListener(new GenericFutureListener<Future<Void>>() {
+            @Override
+            public void operationComplete(Future<Void> future) {
+              if(!future.isSuccess()) {
+                HttpTransport.this.close(new Throwable("Could not send request to server."), false);
+              }
+            }
+          });
         }
-        if (msg instanceof HttpContent) {
-          HttpContent content = (HttpContent) msg;
-          if (content instanceof LastHttpContent) {
-            if(responseStatus.get().code() == 200 || responseStatus.get().code() == 204) {
-              synchronized (HttpTransport.this) {
-                if(!responseFuture.isDone()) {
-                  responseFuture.setSuccess(null);
+      },
+      new Handler<Object>() {
+        @Override
+        public void handle(Object msg) {
+          if(msg instanceof Throwable) {
+            HttpTransport.this.close(new Throwable("Request for address " + address + " resulted in an exception."), false);
+            return;
+          }
+          else if(responseHandler != null) {
+            responseHandler.handle(msg);
+          }
+          if (msg instanceof HttpResponse) {
+            HttpResponse response = (HttpResponse) msg;
+            responseStatus.set(response.status());
+            if (httpOptions.getEnableJSessionIdCookie() && !response.headers().isEmpty()) {
+              List<String> rawCookies = response.headers().getAll("Set-Cookie");
+              for(String rawCookie : rawCookies) {
+                Cookie cookie = ClientCookieDecoder.LAX.decode(rawCookie);
+                if(cookie.name().equals("JSESSIONID")) {
+                  HttpTransport.this.jSessionIdCookie = cookie;
                 }
               }
-            } else if(responseStatus.get().code() == 404) {
-              if(HttpTransport.this.connected.getAndSet(false)) {
-                HttpTransport.this.logger.error("Server returned status 404, indicating that the current session is unknown. Disconnecting.");
-                HttpTransport.this.close(false);
+            }
+          }
+          if (msg instanceof HttpContent) {
+            HttpContent content = (HttpContent) msg;
+            if (content instanceof LastHttpContent) {
+              if(responseStatus.get().code() == 200 || responseStatus.get().code() == 204) {
+                synchronized (HttpTransport.this) {
+                  if(!responseFuture.isDone()) {
+                    responseFuture.setSuccess(null);
+                  }
+                }
+              } else if(responseStatus.get().code() == 404) {
+                HttpTransport.this.close(new Throwable("Server returned status 404: session unknown."), false);
+              } else {
+                HttpTransport.this.close(new Throwable("Request for address " + address + " resulted in status code " + responseStatus.get().code() + "."), false);
               }
-            } else {
-              HttpTransport.this.handleError(responseFuture,
-                                             "Request for address " + address + " resulted in an error.",
-                                             new Throwable("Request for address " + address + " did returned status code " + responseStatus.get().code() + ", indicating failure."));
             }
           }
         }
-      }
-    }));
-    ChannelFuture channelFuture = this.bootstrap.connect(this.options.getHost(), this.options.getPort());
-    channelFuture.addListener(new GenericFutureListener<Future<Void>>() {
+      }));
+
+    Future<InetSocketAddress> addressFuture;
+    if(isDirectHttpProxy) {
+      // As the bootstrap resolver has been set to NoopAddressResolverGroup, we need to resolve manually here
+      addressFuture = DefaultAddressResolverGroup.INSTANCE.getResolver(this.group.next()).resolve(InetSocketAddress.createUnresolved(proxyOptions.getHost(), proxyOptions.getPort()));
+    } else {
+      addressFuture = new SucceededFuture<>(this.group.next(), InetSocketAddress.createUnresolved(this.options.getHost(), this.options.getPort()));
+    }
+
+    addressFuture.addListener(new GenericFutureListener<Future<InetSocketAddress>>() {
       @Override
-      public void operationComplete(Future<Void> future) {
-        if(!future.isSuccess()) {
-          responseHandler.handle(new Exception("Could not perform request for address " + address + ".", future.cause()));
-          HttpTransport.this.handleError(responseFuture, "Could not perform request for address " + address + ".", future.cause());
-          if(HttpTransport.this.connected.getAndSet(false)) {
-            HttpTransport.this.close(false);
-          }
+      public void operationComplete(Future<InetSocketAddress> addressFuture) throws Exception {
+        if(!addressFuture.isSuccess()) {
+          HttpTransport.this.close(new Throwable("Request for address " + address + " could not be performed. Proxy address could not be resolved.", addressFuture.cause()), false);
           return;
         }
 
-        Channel channel = channelFuture.channel();
-
-        if(isXhrFetchRequest) {
-          HttpTransport.this.currentXhrFetchRequestChannel = channel;
-        }
-
-        StringBuilder url = new StringBuilder();
-        url.append("http");
-        if(options.isSsl()) {
-          url.append("s");
-        }
-        url.append("://").append(options.getHost()).append(httpOptions.getPath());
-        if(addSessionPart == AddSessionPart.BeforeAddress) {
-          url.append(HttpTransport.this.sessionPart);
-        }
-        url.append(address);
-        if(addSessionPart == AddSessionPart.AfterAddress) {
-          url.append(HttpTransport.this.sessionPart);
-        }
-
-        FullHttpRequest request = new DefaultFullHttpRequest(HttpVersion.HTTP_1_1, method, url.toString());
-
-        request.headers().set(HttpHeaderNames.HOST, options.getHost());
-        request.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/plain;charset=UTF-8");
-
-        if(httpOptions.getEnableJSessionIdCookie()) {
-          request.headers().set("access-control-allow-origin", "true");
-          if(HttpTransport.this.jSessionIdCookie != null) {
-            request.headers().set(HttpHeaderNames.COOKIE, ClientCookieEncoder.STRICT.encode(HttpTransport.this.jSessionIdCookie));
+        requestBootstrap.connect(addressFuture.getNow()).addListener(new GenericFutureListener<Future<Void>>() {
+          @Override
+          public void operationComplete(Future<Void> future) throws Exception {
+            if(!future.isSuccess()) {
+              HttpTransport.this.close(new Throwable("Request for address " + address + " could not be performed.", future.cause()), false);
+            }
           }
-        }
-
-        if(body != null)
-        {
-          ByteBuf bodyBuffer = Unpooled.copiedBuffer(body, CharsetUtil.UTF_8);
-          request.headers().set(HttpHeaderNames.CONTENT_LENGTH, bodyBuffer.readableBytes());
-          request.content().clear().writeBytes(bodyBuffer);
-        }
-
-        channel.writeAndFlush(request);
-        // Do not close the channel, as sometimes it needs to stay open to fetch a response, server closes
+        });
       }
     });
+
     return responseFuture;
   }
 
+
   @Override
   public void handleError(String message, Throwable throwable) {
-    if(!this.closed.get()) {
+    if(this.state != State.Closed) {
       super.handleError(message, throwable);
-    }
-  }
-
-  private void handleError(Promise<Void> future, String message, Throwable throwable) {
-    this.handleError(message, throwable);
-
-    synchronized (HttpTransport.this) {
-      if(!future.isDone()) {
-        future.setFailure(new Throwable(message, throwable));
-      }
     }
   }
 
   @Override
   public void send(String message) {
-    if(!this.connected.get()) {
+    if(this.state != State.Connected) {
       this.logger.error("Could not send message on unconnected transport: " + message);
       return;
     }
@@ -365,19 +423,32 @@ public class HttpTransport extends Transport {
 
   @Override
   public Future<Void> close() {
-    if(!this.connected.getAndSet(false)) {
+    if(this.state == State.Closed) {
       this.logger.error("Could not close unconnected transport.");
       return group.next().<Void>newFailedFuture(new Throwable("Could not close unconnected transport."));
     }
-    return this.close(true);
+    return this.close(null, true);
   }
 
-  private Future<Void> close(boolean tellBridge) {
-    this.closed.set(true);
+  private synchronized Future<Void> close(Throwable cause, boolean tellBridge) {
+
+    if(this.connectFuture != null && !this.connectFuture.isDone()) {
+      this.connectFuture.setFailure(cause == null ? new Exception() : cause);
+      this.connectFuture = null;
+    }
+    else if(cause != null) {
+      this.handleError(cause.getMessage(), cause.getCause());
+    }
+
+    if(this.state == State.Connected) {
+      this.closeHandler.handle(false);
+    }
+    this.state = State.Closed;
+
     if(this.currentXhrFetchRequestChannel != null && this.currentXhrFetchRequestChannel.isOpen()) {
       this.currentXhrFetchRequestChannel.close();
     }
-    this.closeHandler.handle(null);
+
     if(tellBridge) {
       // TODO: performClose results in a 404
       // return this.performClose();

@@ -121,7 +121,7 @@ public class EventBusClient {
   private Future<Void> connectFuture;
   private ScheduledFuture<?> reconnectFuture;
   private boolean initializedTransport;
-  private boolean connected;
+  private boolean connected = false;
   private boolean closed = false;
   private int reconnectTries;
 
@@ -203,16 +203,23 @@ public class EventBusClient {
         handleMsg(msg);
       }
     });
-    transport.closeHandler(new Handler<Void>() {
+    transport.closeHandler(new Handler<Boolean>() {
       @Override
-      public void handle(Void event) {
+      public void handle(Boolean cancelledConnect) {
         synchronized (EventBusClient.this) {
-          logger.info("Closed connection to bridge.");
           connected = false;
-          if (closeHandler != null) {
-            closeHandler.handle(null);
+          connectFuture = null;
+          if(cancelledConnect) {
+            logger.info("Cancelled connecting to bridge.");
+          } else {
+            logger.info("Closed connection to bridge.");
+            if (closeHandler != null) {
+              closeHandler.handle(null);
+            }
           }
-          pingPeriodic.cancel(false);
+          if(pingPeriodic != null) {
+            pingPeriodic.cancel(false);
+          }
           autoReconnect();
         }
       }
@@ -229,10 +236,11 @@ public class EventBusClient {
     Integer port = EventBusClient.this.eventBusClientOptions.getPort();
 
     if(EventBusClient.this.eventBusClientOptions.getProxyOptions() != null) {
-      logger.info("Connecting to bridge at " + host + ":" + port + " (via " + EventBusClient.this.eventBusClientOptions.getProxyOptions().toString() + ") using " + (EventBusClient.this.eventBusClientOptions.isSsl() ? "TLS secured " : "") + this.transport.getClass().getSimpleName() + "...");
-    } else {
-      logger.info("Connecting to bridge at " + host + ":" + port + " using " + (EventBusClient.this.eventBusClientOptions.isSsl() ? "TLS secured " : "") + this.transport.getClass().getSimpleName() + "...");
+      logger.info("Using " + EventBusClient.this.eventBusClientOptions.getProxyOptions().toString() + ".");
     }
+    logger.info("Connecting to bridge at " + host + ":" + port + " using " +
+      (EventBusClient.this.eventBusClientOptions.isSsl() ? "TLS secured " : "") +
+      this.transport.toString() + "...");
 
     connectFuture = transport.connect()
       .addListener(new GenericFutureListener<Future<? super Void>>() {
@@ -525,20 +533,20 @@ public class EventBusClient {
       List<MessageHandler> handlers;
       if (consumers == null) {
         handlers = Collections.singletonList((MessageHandler) handler);
-        // If we would just create a task for it, that would be send upon connection creation redundandly to all other re-registered handlers
-        if(atServer) {
-          if(connected) {
-            logger.info("Registering address: " + address);
-            send("register", address, null, headers, null);
-          } else {
-            initializeTransport();
-            connectTransport();
-          }
-        }
       } else {
         ArrayList<MessageHandler> tmp = new ArrayList<>(consumers.handlers);
         tmp.add(handler);
         handlers = new ArrayList<>(tmp);
+      }
+      // If we would just create a task for it, that would be send upon connection creation redundandly to all other re-registered handlers
+      if(atServer) {
+        if(connected) {
+          logger.info("Registering address: " + address);
+          send("register", address, null, headers, null);
+        } else {
+          initializeTransport();
+          connectTransport();
+        }
       }
       consumerMap.put(address, new HandlerList(handlers, atServer));
     }
@@ -642,9 +650,9 @@ public class EventBusClient {
       @Override
       public void handle(Transport event) {
         if(message.length() > eventBusClientOptions.getMessagePrintLimit()) {
-          logger.info("Sending message with " + message.length() + " chars.");
+          logger.trace("Sending message with " + message.length() + " chars.");
         } else {
-          logger.info("Sending message: " + message);
+          logger.trace("Sending message: " + message);
         }
         transport.send(message);
       }

@@ -6,6 +6,7 @@ import io.netty.util.concurrent.Future;
 import io.vertx.ext.eventbus.client.logging.Logger;
 import io.vertx.ext.eventbus.client.logging.LoggerFactory;
 import io.vertx.ext.eventbus.client.EventBusClientOptions;
+import io.vertx.ext.eventbus.client.options.HttpTransportOptions;
 
 public class TcpTransport extends Transport {
 
@@ -16,11 +17,12 @@ public class TcpTransport extends Transport {
     super(group, options);
     this.bootstrap.channel(NioSocketChannel.class);
     this.logger = LoggerFactory.getLogger(TcpTransport.class);
+    // TODO: add transparent proxy or throw exception if instantiated with it
   }
 
   @Override
   public Future<Void> connect() {
-    this.channel = new TcpTransportChannel(this, options);
+    this.channel = new TcpTransportChannel(this);
     this.bootstrap.handler(this.channel);
     return this.bootstrap.connect(this.options.getHost(), this.options.getPort());
   }
@@ -39,5 +41,10 @@ public class TcpTransport extends Transport {
       return group.next().<Void>newFailedFuture(new Throwable("Could not close unconnected transport."));
     }
     return this.channel.close();
+  }
+
+  @Override
+  public String toString() {
+    return "TCP transport";
   }
 }

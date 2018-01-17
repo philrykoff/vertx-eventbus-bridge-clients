@@ -3,7 +3,7 @@ package io.vertx.ext.eventbus.client.transport;
 import io.netty.channel.*;
 import io.netty.handler.codec.http.*;
 import io.vertx.ext.eventbus.client.Handler;
-import io.vertx.ext.eventbus.client.EventBusClientOptions;
+import io.vertx.ext.eventbus.client.logging.LoggerFactory;
 
 /**
  * @author <a href="mailto:pl@linux.com">Phil Lehmann</a>
@@ -11,13 +11,13 @@ import io.vertx.ext.eventbus.client.EventBusClientOptions;
 class HttpTransportChannel extends TransportChannel {
 
   private boolean aggregateChunks;
-  private boolean compressed;
+  private Handler<Channel> channelHandler;
   private Handler<Object> responseHandler;
 
-  HttpTransportChannel(Transport transport, EventBusClientOptions options, boolean aggregateChunks, boolean compressed, Handler<Object> responseHandler) {
-    super(transport, options);
+  HttpTransportChannel(Transport transport, boolean aggregateChunks, Handler<Channel> channelHandler, Handler<Object> responseHandler) {
+    super(transport);
     this.aggregateChunks = aggregateChunks;
-    this.compressed = compressed;
+    this.channelHandler = channelHandler;
     this.responseHandler = responseHandler;
   }
 
@@ -29,11 +29,9 @@ class HttpTransportChannel extends TransportChannel {
 
     ChannelPipeline pipeline = channel.pipeline();
     pipeline.addLast(new HttpClientCodec());
-    if(this.compressed) {
-      // pipeline.addLast(new HttpContentDecompressor());
-    }
+    //  pipeline.addLast(new HttpContentDecompressor());
     if(this.aggregateChunks) {
-      pipeline.addLast(new HttpObjectAggregator(Integer.MAX_VALUE));
+      pipeline.addLast(new HttpObjectAggregator(20 * 1024 * 1024));
     }
     pipeline.addLast(new SimpleChannelInboundHandler<HttpObject>() {
 
@@ -50,9 +48,14 @@ class HttpTransportChannel extends TransportChannel {
 
       @Override
       public void exceptionCaught (ChannelHandlerContext ctx, Throwable cause){
-        ctx.close();
-        HttpTransportChannel.this.responseHandler.handle(cause);
+        transport.handleError("A connection exception occured.", cause);
+        HttpTransportChannel.this.transport.closeHandler.handle(false);
       }
     });
+  }
+
+  @Override
+  void handshakeCompleteHandler(Channel channel) {
+    this.channelHandler.handle(channel);
   }
 }

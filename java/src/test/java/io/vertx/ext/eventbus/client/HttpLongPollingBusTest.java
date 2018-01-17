@@ -1,5 +1,7 @@
 package io.vertx.ext.eventbus.client;
 
+import io.netty.handler.codec.http.HttpObject;
+import io.netty.handler.codec.http.HttpRequest;
 import io.vertx.core.http.HttpServer;
 import io.vertx.core.http.HttpServerOptions;
 import io.vertx.core.net.JksOptions;
@@ -15,10 +17,14 @@ import io.vertx.ext.web.handler.sockjs.SockJSHandler;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.junit.Test;
-import org.littleshoot.proxy.HttpProxyServer;
+import org.littleshoot.proxy.*;
+import org.littleshoot.proxy.extras.SelfSignedMitmManager;
 import org.littleshoot.proxy.impl.DefaultHttpProxyServer;
 
+import javax.net.ssl.SSLEngine;
+import java.net.InetSocketAddress;
 import java.net.UnknownHostException;
+import java.util.Queue;
 
 /**
  * @author <a href="mailto:julien@julienviet.com">Julien Viet</a>
@@ -26,18 +32,20 @@ import java.net.UnknownHostException;
 public class HttpLongPollingBusTest extends TcpBusTest {
 
   static int MAX_WEBSOCKET_FRAME_SIZE = 1024 * 1024;
-  private static HttpProxyServer proxy;
+
+  private static HttpProxyServer httpProxy;
+  private static int httpProxyPort = 8000;
 
   @BeforeClass
   public static void beforeClass() throws UnknownHostException {
     TcpBusTest.beforeClass();
-    proxy = DefaultHttpProxyServer.bootstrap().withPort(8000).withAllowLocalOnly(true).start();
+    httpProxy = DefaultHttpProxyServer.bootstrap().withPort(httpProxyPort).withTransparent(true).start();
   }
 
   @AfterClass
   public static void afterClass() {
     TcpBusTest.afterClass();
-    proxy.stop();
+    httpProxy.stop();
   }
 
   @Override
@@ -72,18 +80,18 @@ public class HttpLongPollingBusTest extends TcpBusTest {
   }
 
   @Override
-  protected void stopBridge(TestContext ctx, Handler<Void> handler) {
+  protected void startBridge(TestContext ctx, Handler<Void> handler) {
 
-    ctx.<HttpServer>get("bridge").close(v -> {
+    ctx.<HttpServer>get("bridge").listen(7000, v -> {
       ctx.assertTrue(v.succeeded());
       handler.handle(null);
     });
   }
 
   @Override
-  protected void startBridge(TestContext ctx, Handler<Void> handler) {
+  protected void stopBridge(TestContext ctx, Handler<Void> handler) {
 
-    ctx.<HttpServer>get("bridge").listen(7000, v -> {
+    ctx.<HttpServer>get("bridge").close(v -> {
       ctx.assertTrue(v.succeeded());
       handler.handle(null);
     });
@@ -95,23 +103,34 @@ public class HttpLongPollingBusTest extends TcpBusTest {
   }
 
   @Test
-  public void testProxyHttp(final TestContext ctx) {
+  public void testProxyHttpConnect(final TestContext ctx) {
     final Async async = ctx.async();
     EventBusClient client = client(ctx);
 
     ctx.<EventBusClientOptions>get("clientOptions").setPort(7000).setAutoReconnect(false)
-      .setProxyOptions(new ProxyOptions(ProxyType.HTTP, "localhost", 8000));
+                               .setProxyOptions(new ProxyOptions(ProxyType.HTTP_CONNECT, "localhost", httpProxyPort));
 
     performHelloWorld(ctx, async, client);
   }
 
   @Test
-  public void testProxyHttpSsl(final TestContext ctx) {
+  public void testProxyHttpTransparent(final TestContext ctx) {
+    final Async async = ctx.async();
+    EventBusClient client = client(ctx);
+
+    ctx.<EventBusClientOptions>get("clientOptions").setPort(7000).setAutoReconnect(false)
+                               .setProxyOptions(new ProxyOptions(ProxyType.HTTP_DIRECT, "localhost", httpProxyPort));
+
+    performHelloWorld(ctx, async, client);
+  }
+
+  @Test
+  public void testProxyHttpConnectSsl(final TestContext ctx) {
     final Async async = ctx.async();
     EventBusClient client = client(ctx);
 
     ctx.<EventBusClientOptions>get("clientOptions").setPort(7001).setSsl(true).setTrustAll(true).setVerifyHost(false).setAutoReconnect(false)
-                                                   .setProxyOptions(new ProxyOptions(ProxyType.HTTP, "localhost", 8000));
+      .setProxyOptions(new ProxyOptions(ProxyType.HTTP_CONNECT, "localhost", httpProxyPort).setUsername("foo").setPassword("bar"));
 
     performHelloWorld(ctx, async, client);
 
@@ -119,12 +138,30 @@ public class HttpLongPollingBusTest extends TcpBusTest {
   }
 
   @Test
-  public void testProxyHttpFailure(final TestContext ctx) {
+  public void testProxyHttpConnectFailure(final TestContext ctx) {
     final Async async = ctx.async();
     EventBusClient client = client(ctx);
 
     ctx.<EventBusClientOptions>get("clientOptions").setPort(7000).setAutoReconnect(false)
-      .setProxyOptions(new ProxyOptions(ProxyType.HTTP, "localhost", 8001));
+                               .setProxyOptions(new ProxyOptions(ProxyType.HTTP_CONNECT, "localhost", httpProxyPort + 1));
+
+    client.connectedHandler(event -> {
+      client.close();
+      ctx.fail("Should not connect.");
+    });
+
+    client.exceptionHandler(event -> async.complete());
+
+    client.connect();
+  }
+
+  @Test
+  public void testProxyHttpTransparentFailure(final TestContext ctx) {
+    final Async async = ctx.async();
+    EventBusClient client = client(ctx);
+
+    ctx.<EventBusClientOptions>get("clientOptions").setPort(7000).setAutoReconnect(false)
+                               .setProxyOptions(new ProxyOptions(ProxyType.HTTP_DIRECT, "localhost", httpProxyPort + 1));
 
     client.connectedHandler(event -> {
       client.close();

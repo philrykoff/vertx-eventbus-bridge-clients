@@ -1,12 +1,23 @@
 package io.vertx.ext.eventbus.client.transport;
 
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
 import io.netty.channel.*;
+import io.netty.handler.codec.http.*;
+import io.netty.handler.logging.LogLevel;
 import io.netty.handler.proxy.*;
 import io.netty.handler.ssl.SslHandler;
+import io.netty.handler.ssl.SslHandshakeCompletionEvent;
 import io.netty.handler.ssl.util.InsecureTrustManagerFactory;
+import io.netty.util.AsciiString;
+import io.netty.util.CharsetUtil;
+import io.netty.util.NetUtil;
 import io.netty.util.concurrent.Future;
 import io.netty.util.concurrent.GenericFutureListener;
 import io.vertx.ext.eventbus.client.EventBusClientOptions;
+import io.vertx.ext.eventbus.client.logging.Logger;
+import io.vertx.ext.eventbus.client.logging.LoggerFactory;
+import io.vertx.ext.eventbus.client.options.HttpTransportOptions;
 import io.vertx.ext.eventbus.client.options.ProxyOptions;
 import io.vertx.ext.eventbus.client.options.ProxyType;
 import io.vertx.ext.eventbus.client.options.TrustOptions;
@@ -14,6 +25,7 @@ import io.vertx.ext.eventbus.client.options.TrustOptions;
 import javax.net.ssl.*;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
+import java.nio.charset.Charset;
 import java.security.KeyStore;
 import java.security.SecureRandom;
 
@@ -24,10 +36,12 @@ abstract class TransportChannel extends ChannelInitializer {
 
   Transport transport;
   EventBusClientOptions options;
+  private Logger logger;
 
-  TransportChannel(Transport transport, EventBusClientOptions options) {
+  TransportChannel(Transport transport) {
     this.transport = transport;
-    this.options = options;
+    this.options = transport.options;
+    this.logger = LoggerFactory.getLogger(TransportChannel.class);
   }
 
   /**
@@ -42,7 +56,15 @@ abstract class TransportChannel extends ChannelInitializer {
 
     channel.config().setConnectTimeoutMillis(this.options.getConnectTimeout());
 
-    if(this.options.getProxyOptions() == null && !this.options.isSsl()) {
+    ProxyOptions proxyOptions = this.options.getProxyOptions();
+    boolean useProxyHandler = proxyOptions != null && proxyOptions.getType() != ProxyType.HTTP_DIRECT;
+    boolean isDirectHttpProxy = proxyOptions != null && proxyOptions.getType() == ProxyType.HTTP_DIRECT;
+
+    if(isDirectHttpProxy && !(this.options.getTransportOptions() instanceof HttpTransportOptions)) {
+      throw new UnsupportedOperationException("Direct HTTP proxies are only supported with HTTP transport.");
+    }
+
+    if(!useProxyHandler && !this.options.isSsl()) {
       pipeline.addLast(new ChannelInboundHandlerAdapter() {
         @Override
         public void channelActive(ChannelHandlerContext ctx) throws Exception {
@@ -52,9 +74,7 @@ abstract class TransportChannel extends ChannelInitializer {
       });
     }
 
-    if(this.options.getProxyOptions() != null) {
-      ProxyOptions proxyOptions = this.options.getProxyOptions();
-
+    if(useProxyHandler) {
       String proxyHost = proxyOptions.getHost();
       int proxyPort = proxyOptions.getPort();
       String proxyUsername = proxyOptions.getUsername();
@@ -66,7 +86,7 @@ abstract class TransportChannel extends ChannelInitializer {
 
       switch(proxyType) {
         default:
-        case HTTP:
+        case HTTP_CONNECT:
           proxyHandler = proxyUsername != null && proxyPassword != null ?
             new HttpProxyHandler(proxyAddress, proxyUsername, proxyPassword) : new HttpProxyHandler(proxyAddress);
           break;
@@ -87,6 +107,7 @@ abstract class TransportChannel extends ChannelInitializer {
           if (evt instanceof ProxyConnectionEvent) {
             pipeline.remove(proxyHandler);
             pipeline.remove(this);
+            pipeline.remove("proxyExceptionHandler");
             if(!TransportChannel.this.options.isSsl()) {
               TransportChannel.this.handshakeCompleteHandler(channel);
             }
@@ -97,8 +118,8 @@ abstract class TransportChannel extends ChannelInitializer {
       pipeline.addLast("proxyExceptionHandler", new ChannelHandlerAdapter() {
         @Override
         public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
-          // TODO: ignore if closed
           transport.handleError("A proxy exception occured.", cause);
+          transport.closeHandler.handle(true);
         }
       });
     }
@@ -126,6 +147,7 @@ abstract class TransportChannel extends ChannelInitializer {
 
       SSLContext clientContext = SSLContext.getInstance("TLS");
       clientContext.init(null, trustManagerFactory == null ? null : trustManagerFactory.getTrustManagers(), new SecureRandom());
+
       SSLEngine sslEngine = clientContext.createSSLEngine(this.options.getHost(), this.options.getPort());
       sslEngine.setUseClientMode(true);
       sslEngine.setSSLParameters(sslParams);
@@ -134,16 +156,26 @@ abstract class TransportChannel extends ChannelInitializer {
       sslHandler.handshakeFuture().addListener(new GenericFutureListener<Future<Channel>>() {
           @Override
           public void operationComplete(Future<Channel> future) {
-            if(future.isSuccess()) {
-              TransportChannel.this.handshakeCompleteHandler(future.getNow());
+            if(!future.isSuccess()) {
+              transport.handleError("Could not perform TLS handshake.", future.cause());
             }
           }
         });
       pipeline.addLast("sslHandler", sslHandler);
+      pipeline.addLast(new ChannelInboundHandlerAdapter() {
+        @Override
+        public void userEventTriggered(ChannelHandlerContext ctx, Object evt) throws Exception {
+          if (evt instanceof SslHandshakeCompletionEvent) {
+            TransportChannel.this.handshakeCompleteHandler(channel);
+          }
+          ctx.fireUserEventTriggered(evt);
+        }
+      });
       pipeline.addLast("sslExceptionHandler", new ChannelHandlerAdapter() {
         @Override
         public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
           transport.handleError("A TLS exception occured.", cause);
+          transport.closeHandler.handle(true);
         }
       });
     }

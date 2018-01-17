@@ -2,6 +2,7 @@ package io.vertx.ext.eventbus.client.transport;
 
 import io.netty.bootstrap.Bootstrap;
 import io.netty.channel.nio.NioEventLoopGroup;
+import io.netty.resolver.NoopAddressResolverGroup;
 import io.netty.util.concurrent.Future;
 import io.vertx.ext.eventbus.client.EventBusClientOptions;
 import io.vertx.ext.eventbus.client.Handler;
@@ -17,17 +18,23 @@ public abstract class Transport {
 
   Handler<Void> connectedHandler;
   Handler<String> messageHandler;
-  Handler<Void> closeHandler;
+  Handler<Boolean> closeHandler;
   private Handler<Throwable> exceptionHandler;
 
   Transport(NioEventLoopGroup group, EventBusClientOptions options) {
     this.group = group;
     this.bootstrap = new Bootstrap().group(group);
-    this.options = options;
     this.logger = LoggerFactory.getLogger(Transport.class);
+    // Disable dns resolvement if using proxy
+    if(options.getProxyOptions() != null) {
+      this.bootstrap.resolver(NoopAddressResolverGroup.INSTANCE);
+    }
+    this.options = options;
   }
 
   public abstract Future<Void> connect();
+
+  public abstract String toString();
 
   public abstract void send(String message);
 
@@ -41,7 +48,7 @@ public abstract class Transport {
     this.messageHandler = handler;
   }
 
-  public void closeHandler(Handler<Void> handler) {
+  public void closeHandler(Handler<Boolean> handler) {
     this.closeHandler = handler;
   }
 

@@ -25,8 +25,8 @@ class WebSocketTransportChannel extends TransportChannel {
   private boolean reading;
   private boolean flush;
 
-  WebSocketTransportChannel(Transport transport, EventBusClientOptions options) {
-    super(transport, options);
+  WebSocketTransportChannel(Transport transport) {
+    super(transport);
   }
 
   @Override
@@ -42,13 +42,7 @@ class WebSocketTransportChannel extends TransportChannel {
     }
     url.append("://").append(this.options.getHost()).append(options.getPath()).append("/websocket");
 
-    WebSocketClientHandshaker handshaker =
-      WebSocketClientHandshakerFactory.newHandshaker(new URI(url.toString()),
-                                                     WebSocketVersion.V13,
-                                                     null,
-                                                     false,
-                                                     new DefaultHttpHeaders(),
-        options.getMaxWebsocketFrameSize());
+    WebSocketClientHandshaker handshaker = WebSocketClientHandshakerFactory.newHandshaker(new URI(url.toString()), WebSocketVersion.V13, null, false, new DefaultHttpHeaders(), options.getMaxWebsocketFrameSize());
     WebSocketClientProtocolHandler handler = new WebSocketClientProtocolHandler(handshaker);
 
     ChannelPipeline pipeline = channel.pipeline();
@@ -68,6 +62,13 @@ class WebSocketTransportChannel extends TransportChannel {
     pipeline.addLast(new HttpClientCodec());
     pipeline.addLast(new HttpObjectAggregator(8192));
     pipeline.addLast(handler);
+    pipeline.addLast(new ChannelHandlerAdapter() {
+      @Override
+      public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
+        transport.handleError("A connection exception occured.", cause);
+        transport.closeHandler.handle(true);
+      }
+    });
     pipeline.addLast(new ChannelInboundHandlerAdapter() {
       @Override
       public void userEventTriggered(ChannelHandlerContext ctx, Object evt) throws Exception {
@@ -80,8 +81,8 @@ class WebSocketTransportChannel extends TransportChannel {
       @Override
       public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
         reading = true;
-        if (msg instanceof BinaryWebSocketFrame) {
-          BinaryWebSocketFrame frame = (BinaryWebSocketFrame) msg;
+        if (msg instanceof WebSocketFrame) {
+          WebSocketFrame frame = (WebSocketFrame) msg;
           String json = frame.content().toString(StandardCharsets.UTF_8);
           transport.messageHandler.handle(json);
         } else {
@@ -101,7 +102,7 @@ class WebSocketTransportChannel extends TransportChannel {
       public void channelInactive(ChannelHandlerContext ctx) throws Exception {
         handlerCtx = null;
         if(handshakeComplete) {
-          transport.closeHandler.handle(null);
+          transport.closeHandler.handle(false);
         }
       }
     });

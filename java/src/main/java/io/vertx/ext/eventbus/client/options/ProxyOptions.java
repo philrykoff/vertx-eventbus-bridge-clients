@@ -22,9 +22,9 @@ public class ProxyOptions {
   public static final int DEFAULT_PORT = 3128;
 
   /**
-   * The default proxy type (HTTP)
+   * The default proxy type (transparent HTTP)
    */
-  public static final ProxyType DEFAULT_TYPE = ProxyType.HTTP;
+  public static final ProxyType DEFAULT_TYPE = ProxyType.HTTP_DIRECT;
 
   private String host;
   private int port;
@@ -172,6 +172,7 @@ public class ProxyOptions {
 
   @Override
   public String toString() {
-    return this.type.toString() + " proxy " + this.host + ":" + this.port;
+    return this.type.toString() + " proxy " + this.host + ":" + this.port +
+      (this.username != null ? (" with username" + (this.password != null ? " and password" : "")) : " without authentication");
   }
 }

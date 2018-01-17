@@ -1,5 +1,8 @@
 package io.vertx.ext.eventbus.client;
 
+import io.netty.handler.logging.LoggingHandler;
+import io.netty.util.internal.logging.InternalLoggerFactory;
+import io.netty.util.internal.logging.JdkLoggerFactory;
 import io.vertx.core.Vertx;
 import io.vertx.core.eventbus.ReplyException;
 import io.vertx.core.eventbus.ReplyFailure;
@@ -561,7 +564,6 @@ public class TcpBusTest {
     EventBusClient client = client(ctx);
     AtomicBoolean closed = new AtomicBoolean();
     client.closeHandler(v -> {
-      System.out.println("closed");
       closed.set(true);
     });
     client.send("server_addr", Collections.singletonMap("message", "hello"));

@@ -25,8 +25,8 @@ class TcpTransportChannel extends TransportChannel {
   private boolean reading;
   private boolean flush;
 
-  TcpTransportChannel(Transport transport, EventBusClientOptions options) {
-    super(transport, options);
+  TcpTransportChannel(Transport transport) {
+    super(transport);
   }
 
   @Override
@@ -93,7 +93,7 @@ class TcpTransportChannel extends TransportChannel {
       public void channelInactive(ChannelHandlerContext ctx) throws Exception {
         handlerCtx = null;
         if(connectedHandlerInvoked.get()) {
-          transport.closeHandler.handle(null);
+          transport.closeHandler.handle(false);
         }
       }
     });

@@ -9,7 +9,11 @@ public enum ProxyType {
   /**
    * HTTP CONNECT ssl proxy
    */
-  HTTP,
+  HTTP_CONNECT,
+  /**
+   * direct HTTP proxy, which does not support CONNECT
+   */
+  HTTP_DIRECT,
   /**
    * SOCKS4/4a tcp proxy
    */
@@ -17,5 +21,18 @@ public enum ProxyType {
   /**
    * SOCSK5 tcp proxy
    */
-  SOCKS5
+  SOCKS5;
+
+  @Override
+  public String toString () {
+    switch(this)
+    {
+      case HTTP_CONNECT:
+        return "connect HTTP";
+      case HTTP_DIRECT:
+        return "direct HTTP";
+      default:
+        return super.toString();
+    }
+  }
 }
